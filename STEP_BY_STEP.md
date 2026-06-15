@@ -1,17 +1,14 @@
-# 📋 Panduan Langkah-demi-Langkah — Absensi.face
+# 📋 Panduan Langkah-demi-Langkah — SIHADIR
 
-Panduan ini menuntun kamu dari **nol sampai sistem berjalan**, baik untuk uji
-coba di laptop (lokal) maupun deploy ke **AWS Academy Sandbox**. Ikuti urut dari
-atas ke bawah. Setiap langkah ada perintah yang bisa langsung di-copy.
+Panduan dari **nol sampai sistem berjalan**, untuk uji coba di laptop (lokal)
+maupun deploy ke **AWS Academy Sandbox**. Ikuti urut dari atas ke bawah.
 
-> 🎯 Target akhir: mahasiswa bisa absen lewat HP dengan wajah + kedip, dosen
-> melihat dashboard real-time.
+> 🎯 **SIHADIR** = Smart Attendance System. Dosen membuat kelas (dengan kode
+> join), mahasiswa join lalu absen pakai wajah. Tema gelap.
 
 ---
 
 ## 🗺️ Peta Besar (baca dulu 1 menit)
-
-Sistem ini punya 3 bagian:
 
 ```
 ┌─────────────┐      ┌──────────────────┐      ┌─────────────┐
@@ -24,166 +21,129 @@ Sistem ini punya 3 bagian:
    di Vercel             di AWS EC2               di AWS RDS
 ```
 
-Ada **2 jalur** yang bisa kamu tempuh:
+**Konsep utama (model Google Classroom):**
+1. **Dosen** daftar → buat **kelas** → dapat **kode 6 karakter** → buka **sesi absensi**.
+2. **Mahasiswa** daftar (+ enroll wajah) → **join kelas** pakai kode → **absen** (ambil foto wajah) saat sesi aktif.
+3. **Dosen** lihat **rekap** kehadiran (nama, NIM, jarak match, waktu, **foto wajah**) + export CSV.
+
+Ada **2 jalur**:
 
 | Jalur | Untuk apa | Waktu | Butuh AWS? |
 |---|---|---|---|
-| **A. Lokal** | Belajar, ngoding, demo cepat di 1 laptop | ~15 mnt | ❌ Tidak |
+| **A. Lokal** | Belajar / ngoding / demo cepat di 1 laptop | ~15 mnt | ❌ Tidak |
 | **B. AWS Sandbox** | Demo "cloud" sesungguhnya (nilai rubrik) | ~20 mnt | ✅ Ya |
 
-👉 **Saran:** coba **Jalur A dulu** sampai paham alurnya, baru lanjut **Jalur B**.
+👉 Coba **Jalur A** dulu sampai paham, baru **Jalur B**.
 
 ---
 
 ## ✅ Persiapan Awal (wajib untuk kedua jalur)
 
-### 0.1 Software yang harus terpasang di laptop
+### 0.1 Software
 
-| Software | Cek versi | Link unduh |
+| Software | Cek versi | Link |
 |---|---|---|
 | Node.js ≥ 18 | `node -v` | https://nodejs.org |
 | Git | `git --version` | https://git-scm.com |
 | MySQL (untuk Jalur A) | `mysql --version` | https://dev.mysql.com/downloads/installer/ |
 
-> Jika `node -v` memunculkan angka (mis. `v20.x`), berarti sudah siap.
+### 0.2 Unduh bobot model face-api.js
 
-### 0.2 Unduh bobot model face-api.js (WAJIB, sekali saja)
+> ✅ **Sudah ada di repo!** File model sudah di-commit ke
+> `frontend/public/models/`, jadi **tidak perlu unduh manual** lagi. Lewati
+> langkah ini. (Hanya jika folder kosong, jalankan skrip di
+> `frontend/public/models/README.md`.)
 
-Tanpa file ini, kamera tidak bisa mengenali wajah.
+### 0.3 Aturan email (penting!)
 
-1. Buka folder: `frontend/public/models/`
-2. Jalankan PowerShell **di dalam folder itu**:
+Backend membatasi domain email:
+- **Dosen** → harus berakhiran `@itb.ac.id`
+- **Mahasiswa** → harus berakhiran `@mahasiswa.itb.ac.id`
 
-```powershell
-cd "frontend\public\models"
-$base = "https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights"
-$files = @(
-  "tiny_face_detector_model-weights_manifest.json",
-  "tiny_face_detector_model-shard1",
-  "face_landmark_68_model-weights_manifest.json",
-  "face_landmark_68_model-shard1",
-  "face_recognition_model-weights_manifest.json",
-  "face_recognition_model-shard1",
-  "face_recognition_model-shard2"
-)
-foreach ($f in $files) { Invoke-WebRequest "$base/$f" -OutFile $f }
-```
-
-3. Pastikan ada **7 file** di folder itu (selain `README.md` dan `.gitkeep`):
-
-```powershell
-dir
-```
-
-✔️ Kalau 7 file sudah ada, lanjut.
+> 💡 Email **tidak harus inbox asli** — sistem hanya cek akhirannya. Jadi saat
+> daftar/demo kamu bebas pakai mis. `test@mahasiswa.itb.ac.id`.
+> Mau pakai email bebas (gmail dll.)? Lihat **§Troubleshooting → "tidak bisa daftar"**.
 
 ---
 
 # 🅰️ JALUR A — Menjalankan di Laptop (Lokal)
 
-## A1. Siapkan Database MySQL
+## A1. Database MySQL
 
-1. Pastikan MySQL service berjalan.
-2. Buat database kosong bernama `absensi`:
-
+Pastikan MySQL jalan, lalu buat database:
 ```powershell
 mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS absensi CHARACTER SET utf8mb4;"
 ```
 
-(Masukkan password root MySQL kamu saat diminta.)
-
-## A2. Jalankan Backend
-
-1. Masuk folder backend & buat file `.env`:
+## A2. Backend
 
 ```powershell
 cd backend
 copy .env.example .env
 ```
-
-2. Buka `backend\.env` dengan editor, **isi 2 baris ini**:
-
+Buka `backend\.env`, isi minimal:
 ```env
+DB_USER=root
 DB_PASS=password_mysql_root_kamu
-JWT_SECRET=tulis_apa_saja_yang_panjang_dan_acak_123456
+JWT_SECRET=tulis_acak_panjang_12345
 ```
+> `DB_HOST=localhost`, `DB_NAME=absensi` biarkan. `S3_BUCKET` boleh kosong saat
+> lokal (foto enroll/absensi di-skip otomatis, tidak error). Domain email default
+> ITB; untuk bebas, kosongkan `LECTURER_EMAIL_DOMAIN=` & `STUDENT_EMAIL_DOMAIN=`.
 
-> Biarkan `DB_HOST=localhost`, `DB_USER=root` *(ganti jika user MySQL-mu bukan root)*,
-> `DB_NAME=absensi`. `S3_BUCKET` boleh dikosongkan saat lokal (foto enroll
-> di-skip otomatis, tidak error).
-
-3. Install, migrasi tabel, isi data awal, lalu jalankan:
-
+Jalankan:
 ```powershell
 npm install
 npm run migrate
 npm run seed
-npm run dev
+npm run dev          # API di http://localhost:4000
 ```
+✔️ Muncul `API listening on :4000`. Biarkan terbuka. Tes: `curl http://localhost:4000/health`
 
-✔️ Kalau muncul `API listening on :4000`, backend **sukses**. Biarkan jendela ini terbuka.
+## A3. Frontend
 
-4. (Opsional) Tes cepat di browser/terminal lain:
-
-```powershell
-curl http://localhost:4000/health
-```
-
-Harus muncul: `{"status":"ok","db":"up"}`
-
-## A3. Jalankan Frontend
-
-Buka terminal **baru** (jangan tutup terminal backend):
-
+Terminal **baru**:
 ```powershell
 cd frontend
-copy .env.example .env.local
+copy .env.example .env.local      # NEXT_PUBLIC_API_URL=http://localhost:4000
 npm install
-npm run dev
+npm run dev                        # http://localhost:3000
 ```
-
-> `.env.local` defaultnya sudah `NEXT_PUBLIC_API_URL=http://localhost:4000` — pas untuk lokal.
-
-✔️ Buka browser ke **http://localhost:3000**
-
 > 📷 Kamera berfungsi di `localhost` walau HTTP (browser menganggapnya aman).
 
 ## A4. Coba Alurnya 🎬
 
-Ikuti urutan ini untuk membuktikan semua fitur jalan:
-
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ ALUR DEMO                                                       │
+│ ALUR DEMO SIHADIR                                              │
 └──────────────────────────────────────────────────────────────┘
 
-1. DAFTAR (sebagai mahasiswa)
-   /register → isi NIM, nama, email, password
-            → izinkan kamera → "Ambil Wajah" → "Daftar"
-            → otomatis masuk ke /checkin
+1. DOSEN — daftar & buat kelas
+   /register → tab "Dosen" → email @itb.ac.id → Daftar
+            → masuk /dashboard → "+ Buat Kelas" (nama + mata kuliah)
+            → dapat KODE KELAS (mis. ABC123) → catat
+            → klik kelas → "Buka Sesi Absensi" → nama sesi (mis. Pertemuan 1)
 
-2. BUAT SESI (sebagai dosen)
-   Logout → /login pakai akun dosen seed:
-            email: dosen@kampus.ac.id  |  password: Passw0rd!
-            → masuk /dashboard → "Buat Sesi" (isi MK, waktu mulai/selesai)
-   * Catatan: sudah ada "Sesi Demo" terbuka 24 jam dari seed.
+2. MAHASISWA — daftar + enroll wajah + join
+   Keluar → /register → tab "Mahasiswa" → email @mahasiswa.itb.ac.id + NIM
+          → "Lanjut → Foto Wajah" → izinkan kamera → "Ambil & Daftarkan Wajah"
+          → otomatis ke /student
+          → tab "Join Kelas" → masukkan KODE dari dosen → Join
 
-3. CHECK-IN (sebagai mahasiswa)
-   Logout → /login pakai akun yang tadi kamu daftarkan
-          → /checkin → pilih sesi → kamera nyala
-          → KEDIPKAN MATA 2× → otomatis capture
-          → muncul hasil: HADIR / TELAT / DITOLAK + alasan
+3. MAHASISWA — absen
+   tab "Absensi" → pilih kelas → pilih sesi aktif
+          → kamera nyala → "Ambil Foto & Absen"
+          → muncul "Absensi berhasil ✓"
 
-4. PANTAU (sebagai dosen)
-   /login dosen → /dashboard → klik sesi
-          → lihat tabel hadir (auto-refresh 5 detik)
-          → grafik Hadir/Telat/Absen → tombol "Export CSV"
+4. DOSEN — pantau rekap
+   /dashboard → klik kelas → baris sesi → "Rekap"
+          → tabel: foto wajah, nama, NIM, jarak match, waktu (auto-refresh 5s)
+          → "Export CSV"
 ```
 
-> ⚠️ **Penting soal akun seed:** akun `10120001` dst. punya descriptor wajah
-> **placeholder** (acak), jadi mereka **tidak bisa** check-in dengan wajah asli.
-> Untuk demo check-in beneran, pakai akun yang **kamu daftarkan sendiri** di
-> langkah 1 (wajahmu tersimpan asli).
+> ⚠️ **Akun seed tidak bisa absen pakai wajah** (descriptor placeholder). Untuk
+> demo absensi sungguhan, pakai akun mahasiswa yang **kamu daftarkan sendiri**
+> di langkah 2 (wajahmu tersimpan asli).
 
 🎉 **Jalur A selesai!**
 
@@ -191,173 +151,177 @@ Ikuti urutan ini untuk membuktikan semua fitur jalan:
 
 # 🅱️ JALUR B — Deploy ke AWS Academy Sandbox
 
-> Karena sandbox menghapus semua resource tiap ~4 jam, langkah B2–B6 **diulang
-> setiap mulai sesi baru**. Tapi B1 (GitHub + Vercel) cukup **sekali**.
+> Sandbox menghapus semua resource tiap ~4 jam. Langkah **B2–B6 diulang setiap
+> mulai sesi**. B1 (GitHub + Vercel) cukup **sekali**.
 
 ## B1. Persiapan Sekali di Awal
 
-### B1a. Push kode ke GitHub
+**B1a. Repo GitHub** — sudah ada di `https://github.com/axsaliaja/LTKA` (public).
+Kalau ada perubahan kode di laptop, push dulu: `git add -A && git commit -m "..." && git push`.
 
-1. Buat repo baru di https://github.com (set **Public** agar EC2 bisa clone tanpa login).
-2. Dari folder proyek ini:
+**B1b. Vercel** — import repo, **Root Directory = `frontend`**, lalu Deploy.
 
-```powershell
-git init
-git add .
-git commit -m "Sistem absensi face recognition"
-git branch -M main
-git remote add origin https://github.com/USERNAME/REPO.git
-git push -u origin main
-```
+## B2. Mulai Sesi & Buka CloudShell
 
-> Ganti `USERNAME/REPO` dengan milikmu. File `node_modules`, `.env`, dan bobot
-> model **tidak** ikut ter-push (sudah diatur `.gitignore`) — itu normal.
+1. **Start Lab** (tunggu 🟢) → buka **AWS Console** → region **us-east-1**.
+2. Buka **CloudShell** (ikon terminal kanan atas).
 
-### B1b. Import Frontend ke Vercel
-
-1. Login https://vercel.com pakai akun GitHub.
-2. **Add New → Project** → pilih repo kamu.
-3. **Root Directory**: pilih `frontend`.
-4. Klik **Deploy** (boleh gagal/aneh dulu karena `NEXT_PUBLIC_API_URL` belum ada — akan diisi di B5).
-
----
-
-## B2. Mulai Sesi Sandbox & Buka CloudShell
-
-1. Buka **AWS Academy** → **Start Lab** (tunggu titik jadi hijau 🟢).
-2. Klik **AWS** untuk buka Console. Pastikan region di kanan atas = **N. Virginia (us-east-1)**.
-3. Klik ikon **CloudShell** (terminal) di pojok kanan atas Console.
-
-## B3. Deploy Infrastruktur dengan CloudFormation
-
-Di CloudShell, jalankan (ganti `USERNAME/REPO` dan password):
+## B3. Deploy CloudFormation
 
 ```bash
-git clone https://github.com/USERNAME/REPO.git
-cd REPO
-
+git clone https://github.com/axsaliaja/LTKA.git   # (atau: cd ~/LTKA && git pull)
+cd LTKA
 aws cloudformation deploy \
   --template-file infra/template.yaml \
   --stack-name absensi \
   --region us-east-1 \
   --parameter-overrides \
-     DBPassword='Ganti_Password_Kuat_123' \
-     RepoUrl='https://github.com/USERNAME/REPO.git'
+     DBPassword='Absensi123!' \
+     RepoUrl='https://github.com/axsaliaja/LTKA.git'
 ```
+⏳ **10–12 menit** (paling lama menunggu RDS). EC2 otomatis: install Node+Caddy,
+clone repo, `npm install`, `migrate` + `seed`, start API, HTTPS via nip.io.
 
-> ⏳ Proses ini **10–12 menit** (paling lama menunggu RDS dibuat). Sabar sampai
-> muncul tulisan sukses. Tidak perlu `--capabilities` karena template tidak
-> membuat IAM baru.
-
-Apa yang dibuat otomatis:
-- 🔒 Security Group (EC2 & RDS)
-- 🪣 S3 bucket (foto enroll, privat)
-- 🗄️ RDS MySQL `db.t3.micro`
-- 🖥️ EC2 `t3.small` → otomatis install Node+Caddy, clone repo, migrate+seed, start API, HTTPS
-
-## B4. Ambil Output (URL API)
+## B4. Ambil ApiUrl
 
 ```bash
-aws cloudformation describe-stacks --stack-name absensi \
-  --region us-east-1 \
+aws cloudformation describe-stacks --stack-name absensi --region us-east-1 \
   --query "Stacks[0].Outputs" --output table
 ```
+Catat **`ApiUrl`** (mis. `https://54-91-12-34.nip.io`).
 
-Catat baris **`ApiUrl`**, contohnya:
+## B5. Hubungkan Frontend ke Backend
 
-```
-https://54-91-12-34.nip.io
-```
+1. Vercel → projek → **Settings → Environment Variables**
+   (UI baru: **Settings → Environments → klik "Production"** → bagian Environment Variables).
+2. Set / ubah:
+   - **Key**: `NEXT_PUBLIC_API_URL`
+   - **Value**: `ApiUrl` dari B4 (tanpa garis miring di akhir)
+3. **Deployments → ⋯ → Redeploy.**
 
-## B5. Hubungkan Frontend (Vercel) ke API
-
-1. Buka Vercel → projek kamu → **Settings → Environment Variables**.
-2. Tambah variabel:
-   - **Name**: `NEXT_PUBLIC_API_URL`
-   - **Value**: URL `ApiUrl` dari B4 (mis. `https://54-91-12-34.nip.io`)
-3. Buka tab **Deployments** → titik tiga di deploy terakhir → **Redeploy**.
-
-> 🔁 **IP EC2 berubah tiap sesi sandbox**, jadi langkah B5 ini **wajib diulang**
-> setiap kali kamu rebuild (B2–B4).
+> 🔁 **IP EC2 BERUBAH tiap rebuild stack.** Jadi tiap selesai B3, **WAJIB** ulang
+> B5 (update value + Redeploy). Ini penyebab #1 error "stuck memproses /
+> connection timed out".
 
 ## B6. Verifikasi
 
-1. Tunggu ±3–5 menit setelah CloudFormation selesai (EC2 perlu waktu bootstrap).
-2. Cek kesehatan API (ganti dengan IP-mu):
-
+Tunggu ±3–5 menit setelah CFN selesai (EC2 bootstrap), lalu:
 ```bash
-curl https://54-91-12-34.nip.io/health
+curl -m 10 https://<ip>.nip.io/health        # {"status":"ok","db":"up"}
 ```
+Buka URL Vercel → jalankan **Alur Demo (A4)** dari HP. 📱
 
-Harus muncul: `{"status":"ok","db":"up"}`
-
-3. Buka URL Vercel kamu (mis. `https://repo-kamu.vercel.app`) → coba **Alur Demo**
-   (lihat bagian A4) langsung dari **HP**.
-
-🎉 **Jalur B selesai — sistem berjalan di cloud AWS!**
-
-## B7. Membersihkan (Opsional)
-
-Setelah selesai / sebelum sesi berakhir:
+## B7. Membersihkan / Re-deploy (baca §Troubleshooting bila gagal)
 
 ```bash
 aws cloudformation delete-stack --stack-name absensi --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name absensi --region us-east-1
 ```
-
-(Atau biarkan sandbox menghapusnya sendiri saat waktu habis.)
 
 ---
 
-## 🔁 Ringkasan: Rebuild Cepat Tiap Sesi Baru
-
-Setelah B1 selesai sekali, tiap mulai sesi cukup:
+## 🔁 Ringkasan Rebuild Tiap Sesi Baru
 
 ```
 1. Start Lab → CloudShell (us-east-1)
-2. git clone ... && cd REPO
-3. aws cloudformation deploy ...        (B3)
-4. ambil ApiUrl                          (B4)
-5. update NEXT_PUBLIC_API_URL di Vercel + Redeploy   (B5)
-6. curl .../health → buka URL Vercel     (B6)
+2. cd ~/LTKA && git pull           (ambil kode terbaru)
+3. aws cloudformation deploy ...   (B3)
+4. ambil ApiUrl                    (B4)
+5. update NEXT_PUBLIC_API_URL di Vercel + REDEPLOY   (B5)  ← jangan lupa!
+6. curl .../health → buka URL Vercel                 (B6)
+```
+
+## 🔄 Kalau hanya KODE yang berubah (stack masih hidup)
+
+Tidak perlu rebuild stack. Refresh EC2 via SSH (IP tetap, Vercel tak perlu diubah):
+```bash
+ssh -i labsuser.pem ec2-user@<IP-EC2>
+cd /opt/absensi && sudo git pull
+cd backend && sudo npm install && sudo npm run build && sudo npm run migrate && sudo npm run seed
+sudo systemctl restart absensi-api
 ```
 
 ---
 
 ## 🆘 Troubleshooting
 
-| Gejala | Penyebab & Solusi |
-|---|---|
-| Kamera tidak muncul / "Gagal mengakses kamera" | Belum izinkan kamera, atau halaman bukan HTTPS. Lokal: pakai `localhost` (bukan `127.0.0.1`). Produksi: pastikan URL Vercel `https://`. |
-| "Wajah tidak terdeteksi" terus | Bobot model belum diunduh (lihat 0.2), pencahayaan kurang, atau wajah terlalu jauh. |
-| Check-in "Ditolak: Wajah tidak cocok" | Wajar untuk akun **seed** (descriptor placeholder). Pakai akun yang kamu daftar sendiri. Atau turunkan ketelitian: `MATCH_THRESHOLD=0.6` di `.env`. |
-| Check-in "Liveness gagal" | Kedipan belum terbaca. Kedip tegas 2×, wajah menghadap kamera, cahaya cukup. |
-| Backend error "Missing required env var" | `backend/.env` belum diisi (`DB_PASS`, `JWT_SECRET`). |
-| `npm run migrate` error koneksi | MySQL belum jalan, atau `DB_HOST/DB_USER/DB_PASS` salah di `.env`. |
-| `curl .../health` gagal di AWS | EC2 belum selesai bootstrap (tunggu beberapa menit) atau cek log di EC2: `sudo cat /var/log/absensi-bootstrap.log`. |
-| Halaman Vercel error panggil API | `NEXT_PUBLIC_API_URL` salah/kosong, atau belum **Redeploy** setelah diubah. |
+### "Stuck memproses…" / Console: `net::ERR_CONNECTION_TIMED_OUT`
+Frontend menembak IP backend yang **basi/mati**. Penyebab #1: IP EC2 berubah
+setelah rebuild tapi Vercel belum di-update.
+**Fix:** ambil ApiUrl terbaru (B4) → samakan `NEXT_PUBLIC_API_URL` di Vercel →
+**Redeploy** (B5). Pastikan `curl -m 10 https://<ip>/health` dari CloudShell OK.
+
+### "Tidak bisa daftar" — ditolak soal email
+Email harus sesuai domain: dosen `@itb.ac.id`, mahasiswa `@mahasiswa.itb.ac.id`
+(akhiran saja, tak harus inbox asli). **Mau bebas pakai email apa pun?** Di EC2
+edit `/opt/absensi/backend/.env`, set kosong:
+```
+LECTURER_EMAIL_DOMAIN=
+STUDENT_EMAIL_DOMAIN=
+```
+lalu `sudo systemctl restart absensi-api`. (Lokal: ubah di `backend/.env`.)
+
+### Deploy gagal → stack `ROLLBACK_COMPLETE`
+Stack gagal tidak bisa di-deploy ulang. Hapus dulu:
+```bash
+aws cloudformation delete-stack --stack-name absensi --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name absensi --region us-east-1
+```
+Lihat alasan gagal:
+```bash
+aws cloudformation describe-stack-events --stack-name absensi --region us-east-1 \
+  --query "StackEvents[?contains(ResourceStatus,'FAILED')].[LogicalResourceId,ResourceStatusReason]" \
+  --output table
+```
+
+### Hapus stack gagal → `DELETE_FAILED` (S3 bucket tidak kosong)
+CloudFormation tak bisa hapus bucket berisi foto. Kosongkan dulu:
+```bash
+BUCKET=$(aws cloudformation describe-stack-resources --stack-name absensi --region us-east-1 \
+  --query "StackResources[?LogicalResourceId=='PhotoBucket'].PhysicalResourceId" --output text)
+aws s3 rm "s3://$BUCKET" --recursive
+aws cloudformation delete-stack --stack-name absensi --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name absensi --region us-east-1
+```
+Alternatif cepat (tinggalkan bucket yatim, dibersihkan sandbox):
+```bash
+aws cloudformation delete-stack --stack-name absensi --region us-east-1 --retain-resources PhotoBucket
+```
+
+### Kamera tidak muncul / "Gagal mengakses kamera"
+Izinkan kamera di browser (ikon 🔒 address bar), pastikan halaman **HTTPS**
+(produksi) atau **localhost** (lokal). Jika 404 `/models/...` → folder model
+kosong (lihat §0.2).
+
+### Absen "Wajah tidak cocok"
+Wajar untuk akun **seed** (descriptor placeholder). Pakai akun yang kamu daftar
+sendiri. Atau longgarkan: `MATCH_THRESHOLD=0.6` di `.env` (lebih besar = longgar).
+
+### Endpoint baru 404 (mis. `/classes/mine`)
+Backend EC2 masih versi lama. Lakukan **§Refresh EC2 via SSH** atau rebuild stack.
 
 ---
 
 ## 🔑 Akun Seed (default)
 
-Semua password: **`Passw0rd!`**
+Semua password: **`Passw0rd!`** · Kelas demo: **`Komputasi Awan 2026`** kode **`DEMO01`** (3 mhs sudah join, 1 sesi aktif).
 
-| Peran | Email | Bisa check-in wajah? |
+| Peran | Email | Absen wajah? |
 |---|---|---|
-| Dosen | dosen@kampus.ac.id | — (dosen tidak check-in) |
-| Mahasiswa | anggota1@kampus.ac.id | ❌ (descriptor placeholder) |
-| Mahasiswa | anggota2@kampus.ac.id | ❌ |
-| Mahasiswa | anggota3@kampus.ac.id | ❌ |
+| Dosen | dosen@itb.ac.id | — |
+| Mahasiswa | axsali@mahasiswa.itb.ac.id | ❌ (descriptor placeholder) |
+| Mahasiswa | daffa@mahasiswa.itb.ac.id | ❌ |
+| Mahasiswa | ridho@mahasiswa.itb.ac.id | ❌ |
 
-> Untuk check-in wajah sungguhan → **daftar akun baru** lewat `/register`.
+> Untuk absensi wajah sungguhan → **daftar akun mahasiswa baru** lewat `/register`.
 
 ---
 
-## 📌 Checklist "Isi Manual" (jangan sampai terlewat)
+## 📌 Checklist "Isi Manual"
 
-- [ ] Unduh 7 file bobot model ke `frontend/public/models/` *(0.2)*
 - [ ] `backend/.env`: isi `DB_PASS` & `JWT_SECRET` *(Jalur A)*
 - [ ] `DBPassword` saat `aws cloudformation deploy` *(B3)*
 - [ ] `RepoUrl` = URL GitHub-mu *(B3)*
-- [ ] `NEXT_PUBLIC_API_URL` di Vercel = `ApiUrl`, lalu **Redeploy** *(B5, tiap sesi)*
+- [ ] `NEXT_PUBLIC_API_URL` di Vercel = `ApiUrl`, lalu **Redeploy** *(B5, tiap rebuild!)*
+- [ ] (opsional) Kosongkan domain email kalau mau daftar pakai email bebas
 ```
