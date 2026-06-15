@@ -12,10 +12,8 @@ frontend/out/
 *.env
 !.env.example
 
-# face-api.js model weights (download separately — see frontend/public/models/README.md)
-frontend/public/models/*
-!frontend/public/models/README.md
-!frontend/public/models/.gitkeep
+# face-api.js model weights are committed so Vercel can serve them at /models.
+# (If you prefer to keep the repo light, ignore them again and host on a CDN.)
 
 # Logs / OS
 *.log
