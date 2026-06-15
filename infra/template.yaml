@@ -52,7 +52,7 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-          Description: HTTP (Caddy / Let's Encrypt HTTP-01)
+          Description: HTTP (Caddy and Lets Encrypt HTTP-01)
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
