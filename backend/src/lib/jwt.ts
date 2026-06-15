@@ -4,7 +4,7 @@ import { config } from "../config";
 export type Role = "student" | "lecturer";
 
 export interface JwtPayload {
-  sub: string; // student/lecturer id (NIM)
+  sub: number; // users.id
   role: Role;
   name: string;
 }
@@ -16,5 +16,5 @@ export function signToken(payload: JwtPayload): string {
 }
 
 export function verifyToken(token: string): JwtPayload {
-  return jwt.verify(token, config.jwt.secret) as JwtPayload;
+  return jwt.verify(token, config.jwt.secret) as unknown as JwtPayload;
 }

@@ -19,3 +19,6 @@ frontend/out/
 *.log
 .DS_Store
 Thumbs.db
+
+# TS incremental build info
+frontend/*.tsbuildinfo

@@ -1,60 +1,107 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 html,
 body {
-  background-color: #ffffff; /* canvas */
-  color: #374151; /* body */
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: #0a0a0f;
+  color: #f0f0f5;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
 }
 
 @layer components {
-  /* Display headings substitute Cal Sans with Inter 600 + negative tracking. */
-  .display-xl {
-    @apply text-display-xl font-display text-ink;
+  /* Display headings — Syne with gradient ink. */
+  .display {
+    @apply font-display font-extrabold tracking-tight;
   }
-  .display-lg {
-    @apply text-display-lg font-display text-ink;
-  }
-  .display-md {
-    @apply text-display-md font-display text-ink;
-  }
-  .display-sm {
-    @apply text-display-sm font-display text-ink;
+  .gradient-text {
+    background: linear-gradient(135deg, #ffffff 40%, #a78bfa);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
   }
 
   /* Buttons */
   .btn {
-    @apply inline-flex h-10 items-center justify-center rounded-md px-5 text-body-sm font-semibold transition-colors disabled:cursor-not-allowed;
+    @apply inline-flex h-11 items-center justify-center gap-2 rounded-md px-5 text-[0.92rem] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-primary text-on-primary hover:bg-primary-active active:bg-primary-active disabled:bg-primary-disabled disabled:text-muted;
+    @apply btn bg-accent text-white shadow-glow hover:-translate-y-0.5 hover:shadow-glow-lg;
   }
-  .btn-secondary {
-    @apply btn border border-hairline bg-canvas text-ink hover:bg-surface-soft;
+  .btn-ghost {
+    @apply btn border border-border bg-transparent text-text hover:border-accent hover:text-accent;
+  }
+  .btn-danger {
+    @apply btn border border-error/30 bg-error/10 text-error hover:bg-error/20;
+  }
+  .btn-sm {
+    @apply h-9 px-4 text-[0.8rem];
+  }
+  .btn-full {
+    @apply w-full;
   }
 
   /* Inputs */
   .input {
-    @apply h-10 w-full rounded-md border border-hairline bg-canvas px-[14px] text-body-md text-ink outline-none placeholder:text-muted-soft focus:border-ink;
+    @apply h-11 w-full rounded-md border border-border bg-bg px-4 text-[0.92rem] text-text outline-none transition-colors placeholder:text-muted focus:border-accent;
   }
   .label {
-    @apply mb-xs block text-body-sm font-medium text-ink;
+    @apply mb-2 block text-[0.76rem] font-medium uppercase tracking-wider text-muted;
   }
 
   /* Cards */
   .card {
-    @apply rounded-lg bg-surface-card p-xl;
+    @apply rounded-xl border border-border bg-surface p-6;
   }
-  .card-outline {
-    @apply rounded-lg border border-hairline bg-canvas p-lg;
+
+  /* Pills / badges */
+  .badge {
+    @apply inline-block rounded-pill border border-accent/30 bg-accent/10 px-3 py-1 text-[0.72rem] uppercase tracking-wider text-accent;
   }
+  .kode-badge {
+    @apply inline-block rounded-sm border border-accent/20 bg-accent/10 px-2 py-1 font-mono text-[0.78rem] tracking-widest text-accent;
+  }
+
+  /* Messages */
+  .msg-error {
+    @apply rounded-md border border-error/30 bg-error/10 px-4 py-3 text-[0.85rem] text-error;
+  }
+  .msg-success {
+    @apply rounded-md border border-success/30 bg-success/10 px-4 py-3 text-[0.85rem] text-success;
+  }
+  .msg-info {
+    @apply rounded-md border border-accent/30 bg-accent/10 px-4 py-3 text-[0.85rem] text-accent;
+  }
+}
+
+/* Decorative landing background */
+.grid-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-image: linear-gradient(#222230 1px, transparent 1px),
+    linear-gradient(90deg, #222230 1px, transparent 1px);
+  background-size: 60px 60px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 100%);
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 100%);
+}
+.glow {
+  position: fixed;
+  width: 600px;
+  height: 600px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(79, 142, 247, 0.12) 0%, transparent 70%);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 0;
 }

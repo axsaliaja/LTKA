@@ -1,91 +1,115 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
-import { NavBar, Footer, Container } from "@/components/Chrome";
+import { useRouter } from "next/navigation";
+import { api } from "@/lib/api";
+import { saveAuth, AuthUser } from "@/lib/auth";
 
 export default function HomePage() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const doLogin = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      const res = await api.post<{ token: string; user: AuthUser }>("/auth/login", {
+        email,
+        password,
+      });
+      saveAuth(res.token, res.user);
+      router.push(res.user.role === "lecturer" ? "/dashboard" : "/student");
+    } catch (e: any) {
+      setError(e?.error ?? "Gagal masuk");
+      setBusy(false);
+    }
+  };
+
   return (
     <>
-      <NavBar />
-      <Container>
-        {/* Hero band */}
-        <section className="grid items-center gap-xl py-section md:grid-cols-12">
-          <div className="md:col-span-7">
-            <span className="inline-block rounded-pill bg-surface-card px-sm py-xxs text-caption text-ink">
-              Anti titip-absen
-            </span>
-            <h1 className="display-xl mt-md">
-              Absen kuliah cukup<br />dengan wajahmu.
-            </h1>
-            <p className="mt-lg max-w-md text-body-md text-body">
-              Self check-in dari HP dalam hitungan detik. Pengenalan wajah
-              berjalan di browser, dilindungi liveness detection (tantangan
-              kedip) — foto statis & titip absen tidak akan lolos.
-            </p>
-            <div className="mt-xl flex flex-wrap gap-sm">
-              <Link href="/register" className="btn-primary">
-                Daftar & Enroll Wajah
-              </Link>
-              <Link href="/checkin" className="btn-secondary">
-                Mulai Check-in
-              </Link>
+      <div className="grid-bg" />
+      <div className="glow" />
+
+      <main className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 text-center">
+        <div className="animate-fadeUp">
+          <span className="badge mb-8">Institut Teknologi Bandung</span>
+          <h1 className="display gradient-text text-[clamp(3rem,8vw,5.5rem)] leading-none">
+            SIHADIR
+          </h1>
+          <p className="mx-auto mt-4 max-w-md text-[1.05rem] font-light text-muted">
+            Sistem absensi cerdas berbasis pengenalan wajah. Akurat, real-time, dan
+            bebas titip absen.
+          </p>
+          <div className="mt-10 flex flex-wrap justify-center gap-3">
+            <Link href="/register" className="btn-primary">
+              Daftar Sekarang
+            </Link>
+            <button className="btn-ghost" onClick={() => setOpen(true)}>
+              Masuk
+            </button>
+          </div>
+        </div>
+      </main>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="relative w-full max-w-sm animate-fadeUp rounded-xl border border-border bg-surface p-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="absolute right-4 top-4 text-xl text-muted hover:text-text"
+              onClick={() => setOpen(false)}
+            >
+              ×
+            </button>
+            <h2 className="display text-2xl">Masuk</h2>
+            <p className="mb-6 mt-1 text-[0.9rem] text-muted">Gunakan email institusi kamu</p>
+            <div className="space-y-4">
+              <div>
+                <label className="label">Email</label>
+                <input
+                  className="input"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="nama@itb.ac.id"
+                  onKeyDown={(e) => e.key === "Enter" && doLogin()}
+                />
+              </div>
+              <div>
+                <label className="label">Password</label>
+                <input
+                  className="input"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  onKeyDown={(e) => e.key === "Enter" && doLogin()}
+                />
+              </div>
+              {error && <p className="msg-error">{error}</p>}
+              <button className="btn-primary btn-full" onClick={doLogin} disabled={busy}>
+                {busy ? "Memproses…" : "Masuk"}
+              </button>
+              <p className="text-center text-[0.85rem] text-muted">
+                Belum punya akun?{" "}
+                <Link href="/register" className="font-medium text-accent">
+                  Daftar
+                </Link>
+              </p>
             </div>
           </div>
-
-          {/* Product fragment card */}
-          <div className="md:col-span-5">
-            <div className="rounded-xl border border-hairline bg-canvas p-lg shadow-card">
-              <div className="flex items-center justify-between">
-                <span className="text-title-sm text-ink">Check-in</span>
-                <span className="rounded-pill bg-badge-emerald/20 px-sm py-xxs text-caption text-ink">
-                  Live
-                </span>
-              </div>
-              <div className="mt-md flex h-44 items-center justify-center rounded-lg bg-surface-card text-body-sm text-muted">
-                Kamera live · deteksi kedip
-              </div>
-              <div className="mt-md space-y-xs text-body-sm">
-                <Row label="Liveness" value="Lolos ✓" />
-                <Row label="Match distance" value="0.34 < 0.5" />
-                <Row label="Status" value="Hadir" />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Feature cards */}
-        <section className="grid gap-lg py-section md:grid-cols-3">
-          <Feature
-            title="Kamera live only"
-            body="Input wajah hanya dari getUserMedia. Tidak ada opsi upload file di seluruh alur wajah."
-          />
-          <Feature
-            title="Liveness detection"
-            body="Tantangan kedip acak dihitung dari Eye Aspect Ratio landmark mata — capture hanya setelah kedip terdeteksi."
-          />
-          <Feature
-            title="Validasi di server"
-            body="Liveness & jarak Euclidean descriptor diverifikasi ulang di backend. Klien tidak dipercaya."
-          />
-        </section>
-      </Container>
-      <Footer />
+        </div>
+      )}
     </>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between border-b border-hairline-soft pb-xxs">
-      <span className="text-muted">{label}</span>
-      <span className="font-medium text-ink">{value}</span>
-    </div>
-  );
-}
-
-function Feature({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="card">
-      <h3 className="text-title-md text-ink">{title}</h3>
-      <p className="mt-sm text-body-md text-body">{body}</p>
-    </div>
   );
 }

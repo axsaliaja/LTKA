@@ -1,72 +1,128 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { query } from "../lib/db";
+import { query, execute } from "../lib/db";
 import { signToken } from "../lib/jwt";
 import { isValidDescriptor } from "../lib/euclidean";
 import { uploadEnrollmentPhoto } from "../lib/s3";
+import { authRequired } from "../middleware/auth";
+import { config } from "../config";
 
 export const authRouter = Router();
 
+/** Returns an error string if the email is not allowed for the role, else null. */
+function checkEmailDomain(email: string, role: "student" | "lecturer"): string | null {
+  const domain = config.emailDomains[role];
+  if (!domain) return null; // check disabled
+  if (!email.toLowerCase().endsWith("@" + domain)) {
+    return `Email ${role === "lecturer" ? "dosen" : "mahasiswa"} harus berakhiran @${domain}`;
+  }
+  return null;
+}
+
 const registerSchema = z.object({
-  id: z.string().min(1).max(64), // NIM
   name: z.string().min(1).max(255),
   email: z.string().email().max(255),
-  password: z.string().min(6).max(128),
-  role: z.enum(["student", "lecturer"]).default("student"),
-  descriptor: z.array(z.number()).length(128),
-  // Data-URL JPEG captured live in the browser (optional but recommended).
-  photo: z.string().optional(),
+  password: z.string().min(8).max(128),
+  role: z.enum(["student", "lecturer"]),
+  student_id: z.string().max(64).optional(),
+  jurusan: z.string().max(255).optional(),
+  fakultas: z.string().max(255).optional(),
 });
 
 /**
  * POST /auth/register
- * Create an account, store the face descriptor and (optionally) upload the live
- * enrollment photo to private S3.
+ * Create an account (no face yet). Students enroll their face via
+ * /auth/register-face afterwards. Returns a JWT so that step is authenticated.
  */
 authRouter.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+    res.status(400).json({ error: "Input tidak valid", details: parsed.error.flatten() });
     return;
   }
-  const { id, name, email, password, role, descriptor, photo } = parsed.data;
+  const { name, email, password, role, student_id, jurusan, fakultas } = parsed.data;
 
-  if (!isValidDescriptor(descriptor)) {
-    res.status(400).json({ error: "Invalid face descriptor" });
+  const domainErr = checkEmailDomain(email, role);
+  if (domainErr) {
+    res.status(400).json({ error: domainErr });
+    return;
+  }
+  if (role === "student" && !student_id) {
+    res.status(400).json({ error: "NIM wajib diisi untuk mahasiswa" });
     return;
   }
 
-  // Reject duplicates up-front for a clearer error than a raw SQL failure.
-  const existing = await query(
-    "SELECT id FROM students WHERE id = ? OR email = ? LIMIT 1",
-    [id, email]
+  const dup = await query(
+    "SELECT id FROM users WHERE email = ? OR (student_id IS NOT NULL AND student_id = ?) LIMIT 1",
+    [email.toLowerCase(), student_id ?? null]
   );
-  if (existing.length > 0) {
-    res.status(409).json({ error: "NIM or email already registered" });
+  if (dup.length > 0) {
+    res.status(409).json({ error: "Email atau NIM sudah terdaftar" });
     return;
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
+  const result = await execute(
+    `INSERT INTO users (name, email, password_hash, role, student_id, jurusan, fakultas)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      name,
+      email.toLowerCase(),
+      passwordHash,
+      role,
+      role === "student" ? student_id : null,
+      jurusan ?? null,
+      fakultas ?? null,
+    ]
+  );
+
+  const id = result.insertId;
+  const token = signToken({ sub: id, role, name });
+  res.status(201).json({
+    token,
+    user: { id, name, email: email.toLowerCase(), role, student_id: student_id ?? null, is_face_registered: false },
+  });
+});
+
+const faceSchema = z.object({
+  descriptor: z.array(z.number()).length(128),
+  photo: z.string().optional(),
+});
+
+/**
+ * POST /auth/register-face  (authenticated)
+ * Stores the logged-in student's face descriptor + (optional) live photo.
+ */
+authRouter.post("/register-face", authRequired, async (req, res) => {
+  if (req.user!.role !== "student") {
+    res.status(400).json({ error: "Hanya mahasiswa yang perlu registrasi wajah" });
+    return;
+  }
+  const parsed = faceSchema.safeParse(req.body);
+  if (!parsed.success || !isValidDescriptor(parsed.data.descriptor)) {
+    res.status(400).json({ error: "Descriptor wajah tidak valid" });
+    return;
+  }
+  const userId = req.user!.sub;
 
   let photoKey: string | null = null;
-  if (photo) {
+  if (parsed.data.photo) {
     try {
-      photoKey = await uploadEnrollmentPhoto(id, photo);
+      photoKey = await uploadEnrollmentPhoto(String(userId), parsed.data.photo);
     } catch (e) {
-      // Photo is audit-only; don't fail registration if S3 is unavailable.
-      console.error("S3 upload failed:", e);
+      console.error("S3 enrollment upload failed:", e);
     }
   }
 
-  await query(
-    `INSERT INTO students (id, name, email, password_hash, role, face_descriptor, photo_s3_key)
-     VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), ?)`,
-    [id, name, email, passwordHash, role, JSON.stringify(descriptor), photoKey]
+  await execute(
+    `UPDATE users
+        SET face_descriptor = CAST(? AS JSON), photo_s3_key = ?, is_face_registered = TRUE
+      WHERE id = ?`,
+    [JSON.stringify(parsed.data.descriptor), photoKey, userId]
   );
 
-  const token = signToken({ sub: id, role, name });
-  res.status(201).json({ token, user: { id, name, email, role } });
+  res.json({ message: "Wajah berhasil didaftarkan", is_face_registered: true });
 });
 
 const loginSchema = z.object({
@@ -74,36 +130,45 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-/**
- * POST /auth/login -> JWT
- */
+/** POST /auth/login -> JWT */
 authRouter.post("/login", async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid input" });
+    res.status(400).json({ error: "Input tidak valid" });
     return;
   }
   const { email, password } = parsed.data;
 
   const rows = await query<{
-    id: string;
+    id: number;
     name: string;
     email: string;
     password_hash: string;
     role: "student" | "lecturer";
-  }>("SELECT id, name, email, password_hash, role FROM students WHERE email = ? LIMIT 1", [
-    email,
-  ]);
+    student_id: string | null;
+    is_face_registered: number;
+  }>(
+    `SELECT id, name, email, password_hash, role, student_id, is_face_registered
+       FROM users WHERE email = ? LIMIT 1`,
+    [email.toLowerCase()]
+  );
 
   const user = rows[0];
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-    res.status(401).json({ error: "Invalid email or password" });
+    res.status(401).json({ error: "Email atau password salah" });
     return;
   }
 
   const token = signToken({ sub: user.id, role: user.role, name: user.name });
   res.json({
     token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      student_id: user.student_id,
+      is_face_registered: !!user.is_face_registered,
+    },
   });
 });

@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Absensi.face — Absensi Wajah",
+  title: "SIHADIR — Smart Attendance System",
   description:
-    "Self check-in absensi kuliah berbasis face recognition + liveness detection.",
+    "Sistem absensi cerdas berbasis pengenalan wajah. Akurat, real-time, dan bebas titip absen.",
 };
 
 export default function RootLayout({

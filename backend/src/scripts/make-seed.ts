@@ -1,19 +1,13 @@
 /**
- * Generates seed/seed.sql with real bcrypt password hashes.
+ * Generates seed/seed.sql with real bcrypt password hashes for the SIHADIR
+ * schema (users / classes / class_members / sessions).
  *
  * IMPORTANT about face descriptors:
  *   The descriptors written here are PLACEHOLDERS (deterministic pseudo-random
- *   128-float vectors). They let the seed accounts exist immediately after a
- *   rebuild, but they will NOT match a real live face during check-in.
- *
- *   For a real demo you have two options:
- *     (a) Re-register live on /register (recommended — shows the enrollment
- *         flow), or
- *     (b) Paste real captured descriptors into the DESCRIPTORS map below and
- *         re-run `npm run make-seed`, then commit the regenerated seed.sql.
- *
- *   To capture a real descriptor: open the browser console on /register after
- *   the camera locks your face, and log the descriptor array.
+ *   128-float vectors). Seed accounts exist immediately after a rebuild, but
+ *   they will NOT match a real live face during check-in. For a real demo,
+ *   re-register live on /register (recommended), or paste real captured
+ *   descriptors into DESCRIPTORS below and re-run `npm run make-seed`.
  *
  * Usage: npx ts-node src/scripts/make-seed.ts
  */
@@ -21,38 +15,40 @@ import fs from "fs";
 import path from "path";
 import bcrypt from "bcryptjs";
 
-// Default password for ALL seed accounts. Change before a real deployment.
 const SEED_PASSWORD = "Passw0rd!";
 
 interface SeedUser {
-  id: string;
   name: string;
   email: string;
   role: "student" | "lecturer";
+  student_id?: string;
+  jurusan?: string;
+  fakultas?: string;
 }
 
+// Domains here should match LECTURER_EMAIL_DOMAIN / STUDENT_EMAIL_DOMAIN.
 const USERS: SeedUser[] = [
-  { id: "DOSEN001", name: "Dr. Budi Santoso", email: "dosen@kampus.ac.id", role: "lecturer" },
-  { id: "10120001", name: "Anggota Satu", email: "anggota1@kampus.ac.id", role: "student" },
-  { id: "10120002", name: "Anggota Dua", email: "anggota2@kampus.ac.id", role: "student" },
-  { id: "10120003", name: "Anggota Tiga", email: "anggota3@kampus.ac.id", role: "student" },
+  { name: "Dr. Budi Santoso", email: "dosen@itb.ac.id", role: "lecturer" },
+  { name: "Raqinnaja Axsali", email: "axsali@mahasiswa.itb.ac.id", role: "student", student_id: "18123054", jurusan: "Teknik Telekomunikasi", fakultas: "STEI" },
+  { name: "Daffa Naufal", email: "daffa@mahasiswa.itb.ac.id", role: "student", student_id: "18123023", jurusan: "Teknik Telekomunikasi", fakultas: "STEI" },
+  { name: "Ridho Radifa Al-Haq", email: "ridho@mahasiswa.itb.ac.id", role: "student", student_id: "18123010", jurusan: "Teknik Telekomunikasi", fakultas: "STEI" },
 ];
 
-// Optional: real captured descriptors keyed by user id. If absent, a
-// deterministic placeholder is generated.
 const DESCRIPTORS: Record<string, number[]> = {};
 
-/** Deterministic pseudo-random descriptor so seed.sql is stable across runs. */
 function placeholderDescriptor(seed: string): number[] {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   const out: number[] = [];
   for (let i = 0; i < 128; i++) {
     h = (1103515245 * h + 12345) & 0x7fffffff;
-    // face-api descriptors are roughly in [-0.2, 0.2].
     out.push(Number((((h % 1000) / 1000) * 0.4 - 0.2).toFixed(6)));
   }
   return out;
+}
+
+function esc(s: string): string {
+  return s.replace(/'/g, "''");
 }
 
 async function main() {
@@ -62,23 +58,38 @@ async function main() {
   lines.push("-- Descriptors are placeholders unless real ones were provided.");
   lines.push("");
 
+  // Users (ids will be 1..N in insertion order on a fresh DB).
   for (const u of USERS) {
     const hash = await bcrypt.hash(SEED_PASSWORD, 10);
-    const descriptor = DESCRIPTORS[u.id] ?? placeholderDescriptor(u.id);
-    const descJson = JSON.stringify(descriptor).replace(/'/g, "''");
+    const isStudent = u.role === "student";
+    const desc = isStudent
+      ? `CAST('${esc(JSON.stringify(DESCRIPTORS[u.student_id ?? u.email] ?? placeholderDescriptor(u.email)))}' AS JSON)`
+      : "NULL";
     lines.push(
-      `INSERT IGNORE INTO students (id, name, email, password_hash, role, face_descriptor) VALUES (` +
-        `'${u.id}', '${u.name}', '${u.email}', '${hash}', '${u.role}', ` +
-        `CAST('${descJson}' AS JSON));`
+      `INSERT IGNORE INTO users (name, email, password_hash, role, student_id, jurusan, fakultas, face_descriptor, is_face_registered) VALUES (` +
+        `'${esc(u.name)}', '${esc(u.email)}', '${hash}', '${u.role}', ` +
+        `${u.student_id ? `'${esc(u.student_id)}'` : "NULL"}, ` +
+        `${u.jurusan ? `'${esc(u.jurusan)}'` : "NULL"}, ` +
+        `${u.fakultas ? `'${esc(u.fakultas)}'` : "NULL"}, ` +
+        `${desc}, ${isStudent ? "TRUE" : "FALSE"});`
     );
   }
 
   lines.push("");
-  lines.push("-- A demo session that is open for the next 24h so check-in works right after seed.");
+  lines.push("-- Demo class owned by the lecturer (id 1), join code DEMO01.");
   lines.push(
-    "INSERT IGNORE INTO class_sessions (id, course_name, lecturer_id, start_time, end_time, late_threshold_minutes, is_open) VALUES (" +
-      "'demo-session-0001', 'Cloud Computing (Demo)', 'DOSEN001', " +
-      "UTC_TIMESTAMP(), DATE_ADD(UTC_TIMESTAMP(), INTERVAL 24 HOUR), 15, 1);"
+    "INSERT IGNORE INTO classes (id, name, mata_kuliah, kode_kelas, lecturer_id) VALUES " +
+      "(1, 'Komputasi Awan 2026', 'ET3204', 'DEMO01', 1);"
+  );
+  lines.push("");
+  lines.push("-- Enroll the 3 students (user ids 2,3,4) into the demo class.");
+  lines.push(
+    "INSERT IGNORE INTO class_members (class_id, student_id) VALUES (1, 2), (1, 3), (1, 4);"
+  );
+  lines.push("");
+  lines.push("-- One active attendance session so check-in works right after seed.");
+  lines.push(
+    "INSERT IGNORE INTO sessions (id, class_id, name, is_active) VALUES (1, 1, 'Pertemuan 1 (Demo)', TRUE);"
   );
   lines.push("");
 

@@ -2,20 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadModels, detectFace } from "@/lib/faceapi";
-import { averageEAR, BlinkDetector } from "@/lib/liveness";
 
 export interface CaptureResult {
   descriptor: number[];
   photo: string | null; // data-URL JPEG
-  livenessPassed: boolean;
 }
 
 interface Props {
-  /** Number of blinks required before auto-capture. 0 = no liveness (enroll). */
-  requiredBlinks?: number;
-  /** Label for the manual capture button (only shown when requiredBlinks === 0). */
+  /** Label for the capture button. */
   captureLabel?: string;
-  /** Called once a descriptor (and liveness, if required) is obtained. */
+  /** Called once a face descriptor + snapshot is obtained. */
   onResult: (result: CaptureResult) => void;
   /** Disable interaction (e.g. while submitting). */
   disabled?: boolean;
@@ -23,29 +19,23 @@ interface Props {
 
 /**
  * Live-camera face capture. INPUT IS CAMERA-ONLY — there is intentionally no
- * <input type="file"> anywhere in this component. When requiredBlinks > 0 it
- * runs an EAR-based blink liveness challenge and auto-captures after the user
- * blinks the required number of times.
+ * <input type="file"> here. A face-api.js loop enables the capture button only
+ * when a face is visible; capturing computes the 128-d descriptor + a JPEG
+ * snapshot. (No liveness challenge — matches the SIHADIR flow.)
  */
 export default function CameraCapture({
-  requiredBlinks = 0,
-  captureLabel = "Ambil Wajah",
+  captureLabel = "Ambil Foto",
   onResult,
   disabled = false,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const blinkRef = useRef(new BlinkDetector());
   const rafRef = useRef<number>();
-  const capturedRef = useRef(false);
 
   const [status, setStatus] = useState("Memuat model & kamera…");
   const [faceVisible, setFaceVisible] = useState(false);
-  const [blinks, setBlinks] = useState(0);
-  const [ear, setEar] = useState(0);
   const [ready, setReady] = useState(false);
-
-  const liveness = requiredBlinks > 0;
+  const [busy, setBusy] = useState(false);
 
   const captureFrame = useCallback((): string | null => {
     const video = videoRef.current;
@@ -59,56 +49,38 @@ export default function CameraCapture({
     return canvas.toDataURL("image/jpeg", 0.85);
   }, []);
 
-  const doCapture = useCallback(
-    async (livenessPassed: boolean, stopLoop: boolean) => {
-      const video = videoRef.current;
-      if (!video) return;
-      const det = await detectFace(video);
-      if (!det) {
-        setStatus("Wajah tidak terdeteksi saat menangkap. Coba lagi.");
-        return;
-      }
-      // Only liveness auto-capture freezes the loop; manual enroll capture
-      // stays live so the user can re-take.
-      if (stopLoop) capturedRef.current = true;
-      const photo = captureFrame();
-      onResult({ descriptor: det.descriptor, photo, livenessPassed });
-    },
-    [captureFrame, onResult]
-  );
+  const doCapture = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    setBusy(true);
+    setStatus("Memproses wajah…");
+    const det = await detectFace(video);
+    if (!det) {
+      setStatus("Wajah tidak terdeteksi saat menangkap. Coba lagi.");
+      setBusy(false);
+      return;
+    }
+    const photo = captureFrame();
+    onResult({ descriptor: det.descriptor, photo });
+    setBusy(false);
+  }, [captureFrame, onResult]);
 
-  // Detection loop.
   const loop = useCallback(async () => {
     const video = videoRef.current;
-    if (!video || video.readyState < 2 || capturedRef.current) {
+    if (!video || video.readyState < 2) {
       rafRef.current = requestAnimationFrame(loop);
       return;
     }
     const det = await detectFace(video);
     if (det) {
       setFaceVisible(true);
-      if (liveness) {
-        const earValue = averageEAR(det.landmarks);
-        blinkRef.current.update(earValue);
-        setEar(earValue);
-        const count = blinkRef.current.blinks;
-        setBlinks(count);
-        if (count >= requiredBlinks) {
-          setStatus("Liveness lolos — menangkap wajah…");
-          await doCapture(true, true);
-          return; // stop loop after capture
-        } else {
-          setStatus(`Kedipkan mata ${requiredBlinks}× (${count}/${requiredBlinks})`);
-        }
-      } else {
-        setStatus("Wajah terdeteksi. Tekan tombol untuk menangkap.");
-      }
+      setStatus("Wajah terdeteksi. Tekan tombol untuk menangkap.");
     } else {
       setFaceVisible(false);
       setStatus("Posisikan wajah di dalam bingkai.");
     }
     rafRef.current = requestAnimationFrame(loop);
-  }, [liveness, requiredBlinks, doCapture]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,7 +101,7 @@ export default function CameraCapture({
         video.srcObject = stream;
         await video.play();
         setReady(true);
-        setStatus(liveness ? `Kedipkan mata ${requiredBlinks}×` : "Posisikan wajah di dalam bingkai.");
+        setStatus("Posisikan wajah di dalam bingkai.");
         rafRef.current = requestAnimationFrame(loop);
       } catch (e: any) {
         setStatus(
@@ -148,48 +120,33 @@ export default function CameraCapture({
   }, []);
 
   return (
-    <div className="flex flex-col items-center gap-md">
-      <div className="relative overflow-hidden rounded-lg border border-hairline bg-surface-card">
+    <div className="flex flex-col items-center gap-4">
+      <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg border border-border bg-bg">
         <video
           ref={videoRef}
-          className="block h-[360px] w-[480px] max-w-full -scale-x-100 object-cover"
+          className="h-full w-full -scale-x-100 object-cover"
           playsInline
           muted
         />
         {!ready && (
-          <div className="absolute inset-0 flex items-center justify-center bg-surface-card text-body-sm text-muted">
+          <div className="absolute inset-0 flex items-center justify-center text-[0.85rem] text-muted">
             Memuat…
           </div>
         )}
       </div>
 
-      <p className="text-center text-body-sm text-body" aria-live="polite">
+      <p className="text-center text-[0.85rem] text-muted" aria-live="polite">
         {status}
       </p>
 
-      {liveness ? (
-        <div className="flex items-center gap-md text-caption text-muted">
-          <span>
-            Kedipan:{" "}
-            <span className="font-mono font-semibold text-ink">
-              {blinks}/{requiredBlinks}
-            </span>
-          </span>
-          <span>
-            EAR:{" "}
-            <span className="font-mono font-semibold text-ink">{ear.toFixed(2)}</span>
-          </span>
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={disabled || !faceVisible}
-          onClick={() => doCapture(false, false)}
-        >
-          {captureLabel}
-        </button>
-      )}
+      <button
+        type="button"
+        className="btn-primary btn-full"
+        disabled={disabled || busy || !faceVisible}
+        onClick={doCapture}
+      >
+        {captureLabel}
+      </button>
     </div>
   );
 }

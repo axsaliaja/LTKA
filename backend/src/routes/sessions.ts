@@ -1,79 +1,77 @@
 import { Router } from "express";
-import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import { query, execute } from "../lib/db";
 import { authRequired, requireRole } from "../middleware/auth";
 
 export const sessionsRouter = Router();
 
-/**
- * GET /sessions
- * List currently-open sessions (for the check-in picker).
- * Pass ?all=1 (lecturer) to include closed ones.
- */
-sessionsRouter.get("/", authRequired, async (req, res) => {
-  const all = req.query.all === "1" && req.user?.role === "lecturer";
-  const rows = await query(
-    `SELECT s.id, s.course_name, s.lecturer_id, st.name AS lecturer_name,
-            s.start_time, s.end_time, s.late_threshold_minutes, s.is_open, s.created_at
-       FROM class_sessions s
-       JOIN students st ON st.id = s.lecturer_id
-      ${all ? "" : "WHERE s.is_open = 1"}
-      ORDER BY s.start_time DESC`
-  );
-  res.json(rows);
-});
-
 const createSchema = z.object({
-  course_name: z.string().min(1).max(255),
-  start_time: z.string().min(1), // ISO-8601 string
-  end_time: z.string().min(1),
-  late_threshold_minutes: z.number().int().min(0).max(240).default(15),
+  class_id: z.number().int(),
+  name: z.string().min(1).max(255),
 });
 
-/**
- * POST /sessions  (lecturer only)
- * Create a class session.
- */
+/** POST /sessions  (lecturer, must own the class) — open an attendance session. */
 sessionsRouter.post("/", authRequired, requireRole("lecturer"), async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+    res.status(400).json({ error: "Input tidak valid" });
     return;
   }
-  const { course_name, start_time, end_time, late_threshold_minutes } = parsed.data;
-
-  const start = new Date(start_time);
-  const end = new Date(end_time);
-  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
-    res.status(400).json({ error: "Invalid start/end time range" });
+  const owns = await query("SELECT id FROM classes WHERE id = ? AND lecturer_id = ?", [
+    parsed.data.class_id,
+    req.user!.sub,
+  ]);
+  if (owns.length === 0) {
+    res.status(403).json({ error: "Kelas tidak ditemukan atau bukan milikmu" });
     return;
   }
-
-  const id = uuidv4();
-  const toSql = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
-
-  await query(
-    `INSERT INTO class_sessions
-       (id, course_name, lecturer_id, start_time, end_time, late_threshold_minutes, is_open)
-     VALUES (?, ?, ?, ?, ?, ?, 1)`,
-    [id, course_name, req.user!.sub, toSql(start), toSql(end), late_threshold_minutes]
-  );
-
-  res.status(201).json({ id, course_name, start_time, end_time, late_threshold_minutes, is_open: true });
+  const result = await execute("INSERT INTO sessions (class_id, name) VALUES (?, ?)", [
+    parsed.data.class_id,
+    parsed.data.name,
+  ]);
+  res.status(201).json({ id: result.insertId, name: parsed.data.name, is_active: true });
 });
 
-/**
- * PATCH /sessions/:id/close  (lecturer only, must own the session)
- */
+/** PATCH /sessions/:id/close  (lecturer owner) */
 sessionsRouter.patch("/:id/close", authRequired, requireRole("lecturer"), async (req, res) => {
   const result = await execute(
-    "UPDATE class_sessions SET is_open = 0 WHERE id = ? AND lecturer_id = ?",
+    `UPDATE sessions s
+       JOIN classes c ON c.id = s.class_id
+        SET s.is_active = FALSE, s.closed_at = UTC_TIMESTAMP()
+      WHERE s.id = ? AND c.lecturer_id = ?`,
     [req.params.id, req.user!.sub]
   );
   if (!result.affectedRows) {
-    res.status(404).json({ error: "Session not found or not owned by you" });
+    res.status(404).json({ error: "Sesi tidak ditemukan atau bukan milikmu" });
     return;
   }
-  res.json({ id: req.params.id, is_open: false });
+  res.json({ id: Number(req.params.id), is_active: false });
+});
+
+/**
+ * GET /sessions/class/:classId
+ * List sessions of a class. Lecturer owner or a member student may view.
+ */
+sessionsRouter.get("/class/:classId", authRequired, async (req, res) => {
+  const classId = Number(req.params.classId);
+
+  // Authorize: owner lecturer OR member student.
+  const allowed =
+    req.user!.role === "lecturer"
+      ? await query("SELECT id FROM classes WHERE id = ? AND lecturer_id = ?", [classId, req.user!.sub])
+      : await query("SELECT id FROM class_members WHERE class_id = ? AND student_id = ?", [
+          classId,
+          req.user!.sub,
+        ]);
+  if (allowed.length === 0) {
+    res.status(403).json({ error: "Tidak punya akses ke kelas ini" });
+    return;
+  }
+
+  const rows = await query(
+    `SELECT id, name, is_active, created_at, closed_at
+       FROM sessions WHERE class_id = ? ORDER BY created_at DESC`,
+    [classId]
+  );
+  res.json(rows);
 });

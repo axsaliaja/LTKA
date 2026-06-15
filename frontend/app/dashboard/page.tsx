@@ -2,351 +2,336 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-} from "recharts";
-import { NavBar, Footer, Container } from "@/components/Chrome";
+import { AppHeader } from "@/components/Chrome";
 import { api } from "@/lib/api";
 import { getUser } from "@/lib/auth";
 
-interface Session {
-  id: string;
-  course_name: string;
-  start_time: string;
-  end_time: string;
-  late_threshold_minutes: number;
-  is_open: number | boolean;
-}
-
-interface AttendanceRow {
+interface ClassItem {
   id: number;
-  student_id: string;
-  student_name: string;
+  name: string;
+  mata_kuliah: string;
+  kode_kelas: string;
+  member_count?: number;
+}
+interface SessionItem {
+  id: number;
+  name: string;
+  is_active: number;
+  created_at: string;
+  closed_at: string | null;
+}
+interface RecapRow {
+  id: number;
+  name: string;
+  student_id: string | null;
   checkin_time: string;
-  status: "present" | "late";
-  match_distance: number;
+  match_distance: string | null;
+  photo_url: string | null;
 }
 
-interface Analytics {
-  course_name: string;
-  total_students: number;
-  present: number;
-  late: number;
-  absent: number;
-  percentages: { present: number; late: number; absent: number };
-}
+type View = "classes" | "create" | "detail" | "recap";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [selected, setSelected] = useState<Session | null>(null);
-  const [roster, setRoster] = useState<AttendanceRow[]>([]);
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [view, setView] = useState<View>("classes");
+  const [classes, setClasses] = useState<ClassItem[]>([]);
+  const [currentClass, setCurrentClass] = useState<ClassItem | null>(null);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [recapSession, setRecapSession] = useState<SessionItem | null>(null);
+  const [recap, setRecap] = useState<RecapRow[]>([]);
   const [error, setError] = useState("");
 
-  // New-session form.
-  const [form, setForm] = useState({
-    course_name: "",
-    start_time: "",
-    end_time: "",
-    late_threshold_minutes: 15,
-  });
+  const [form, setForm] = useState({ name: "", mata_kuliah: "" });
+  const [createMsg, setCreateMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     const u = getUser();
-    if (!u) {
-      router.replace("/login");
-      return;
-    }
-    if (u.role !== "lecturer") {
-      router.replace("/checkin");
-      return;
-    }
-    loadSessions();
+    if (!u) return router.replace("/");
+    if (u.role !== "lecturer") return router.replace("/student");
+    loadClasses();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadSessions = async () => {
+  const loadClasses = async () => {
     try {
-      const s = await api.get<Session[]>("/sessions?all=1");
-      setSessions(s);
+      setClasses(await api.get<ClassItem[]>("/classes/mine"));
+    } catch (e: any) {
+      setError(e?.error ?? "Gagal memuat kelas.");
+    }
+  };
+
+  const createClass = async () => {
+    setCreateMsg(null);
+    if (!form.name || !form.mata_kuliah) return setCreateMsg({ text: "Semua field wajib diisi", ok: false });
+    try {
+      const res = await api.post<{ kode_kelas: string }>("/classes", form);
+      setCreateMsg({ text: `Kelas dibuat! Kode: ${res.kode_kelas}`, ok: true });
+      setForm({ name: "", mata_kuliah: "" });
+      loadClasses();
+    } catch (e: any) {
+      setCreateMsg({ text: e?.error ?? "Gagal membuat kelas", ok: false });
+    }
+  };
+
+  const openClass = async (c: ClassItem) => {
+    setCurrentClass(c);
+    setView("detail");
+    await loadSessions(c.id);
+  };
+
+  const loadSessions = async (classId: number) => {
+    try {
+      setSessions(await api.get<SessionItem[]>(`/sessions/class/${classId}`));
     } catch (e: any) {
       setError(e?.error ?? "Gagal memuat sesi.");
     }
   };
 
-  const loadDetail = useCallback(async (session: Session) => {
+  const openSession = async () => {
+    if (!currentClass) return;
+    const name = prompt("Nama sesi (mis. Pertemuan 1):");
+    if (!name) return;
+    await api.post("/sessions", { class_id: currentClass.id, name });
+    loadSessions(currentClass.id);
+  };
+
+  const closeSession = async (id: number) => {
+    if (!confirm("Tutup sesi ini?")) return;
+    await api.patch(`/sessions/${id}/close`);
+    if (currentClass) loadSessions(currentClass.id);
+  };
+
+  const viewRecap = useCallback(async (s: SessionItem) => {
+    setRecapSession(s);
+    setView("recap");
     try {
-      const [r, a] = await Promise.all([
-        api.get<AttendanceRow[]>(`/attendance/session/${session.id}`),
-        api.get<Analytics>(`/analytics/session/${session.id}`),
-      ]);
-      setRoster(r);
-      setAnalytics(a);
+      setRecap(await api.get<RecapRow[]>(`/attendance/session/${s.id}`));
     } catch (e: any) {
-      setError(e?.error ?? "Gagal memuat detail.");
+      setError(e?.error ?? "Gagal memuat rekap.");
     }
   }, []);
 
-  // Real-time refresh of the selected session's roster.
+  // Auto-refresh recap every 5s while viewing it.
   useEffect(() => {
-    if (!selected) return;
-    loadDetail(selected);
-    const t = setInterval(() => loadDetail(selected), 5000);
+    if (view !== "recap" || !recapSession) return;
+    const t = setInterval(async () => {
+      try {
+        setRecap(await api.get<RecapRow[]>(`/attendance/session/${recapSession.id}`));
+      } catch {
+        /* ignore */
+      }
+    }, 5000);
     return () => clearInterval(t);
-  }, [selected, loadDetail]);
-
-  const createSession = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    try {
-      // datetime-local has no timezone; send as ISO so the server parses it.
-      await api.post("/sessions", {
-        course_name: form.course_name,
-        start_time: new Date(form.start_time).toISOString(),
-        end_time: new Date(form.end_time).toISOString(),
-        late_threshold_minutes: Number(form.late_threshold_minutes),
-      });
-      setForm({ course_name: "", start_time: "", end_time: "", late_threshold_minutes: 15 });
-      loadSessions();
-    } catch (e: any) {
-      setError(e?.error ?? "Gagal membuat sesi.");
-    }
-  };
-
-  const closeSession = async (id: string) => {
-    await api.patch(`/sessions/${id}/close`);
-    loadSessions();
-    if (selected?.id === id) setSelected({ ...selected, is_open: 0 });
-  };
+  }, [view, recapSession]);
 
   const exportCsv = () => {
-    if (!selected) return;
-    const header = "student_id,student_name,status,checkin_time,match_distance\n";
-    const rows = roster
-      .map(
-        (r) =>
-          `${r.student_id},"${r.student_name}",${r.status},${r.checkin_time},${r.match_distance}`
-      )
+    if (!recapSession) return;
+    const header = "nama,nim,match_distance,waktu\n";
+    const rows = recap
+      .map((r) => `"${r.name}",${r.student_id ?? "-"},${r.match_distance ?? "-"},${r.checkin_time}`)
       .join("\n");
     const blob = new Blob([header + rows], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `absensi_${selected.course_name}_${selected.id}.csv`;
+    a.download = `rekap_${recapSession.name}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  const chartData = analytics
-    ? [
-        { name: "Hadir", value: analytics.present, color: "#10b981" },
-        { name: "Telat", value: analytics.late, color: "#f59e0b" },
-        { name: "Absen", value: analytics.absent, color: "#ef4444" },
-      ]
-    : [];
-
   return (
-    <>
-      <NavBar />
-      <Container>
-        <h1 className="display-md">Dashboard Dosen</h1>
-        {error && <p className="mt-sm text-body-sm text-error">{error}</p>}
+    <div className="flex min-h-screen flex-col">
+      <AppHeader />
+      <main className="mx-auto w-full max-w-content px-6 py-8">
+        {error && <p className="msg-error mb-4">{error}</p>}
 
-        <div className="mt-xl grid gap-xl lg:grid-cols-3">
-          {/* Create session */}
-          <form onSubmit={createSession} className="card space-y-md lg:col-span-1">
-            <h2 className="text-title-md text-ink">Buat Sesi</h2>
-            <div>
-              <label className="label">Mata kuliah</label>
-              <input
-                className="input"
-                value={form.course_name}
-                onChange={(e) => setForm({ ...form, course_name: e.target.value })}
-                required
-              />
+        {/* CLASSES */}
+        {view === "classes" && (
+          <>
+            <div className="mb-6 flex items-center justify-between">
+              <h1 className="display text-2xl">Kelas Saya</h1>
+              <button className="btn-primary" onClick={() => setView("create")}>
+                + Buat Kelas
+              </button>
             </div>
-            <div>
-              <label className="label">Mulai</label>
-              <input
-                className="input"
-                type="datetime-local"
-                value={form.start_time}
-                onChange={(e) => setForm({ ...form, start_time: e.target.value })}
-                required
-              />
-            </div>
-            <div>
-              <label className="label">Selesai</label>
-              <input
-                className="input"
-                type="datetime-local"
-                value={form.end_time}
-                onChange={(e) => setForm({ ...form, end_time: e.target.value })}
-                required
-              />
-            </div>
-            <div>
-              <label className="label">Ambang telat (menit)</label>
-              <input
-                className="input"
-                type="number"
-                min={0}
-                value={form.late_threshold_minutes}
-                onChange={(e) =>
-                  setForm({ ...form, late_threshold_minutes: Number(e.target.value) })
-                }
-              />
-            </div>
-            <button className="btn-primary w-full">Buat Sesi</button>
-          </form>
-
-          {/* Session list */}
-          <div className="lg:col-span-2">
-            <h2 className="mb-md text-title-md text-ink">Sesi</h2>
-            <div className="space-y-sm">
-              {sessions.length === 0 && (
-                <p className="text-body-md text-muted">Belum ada sesi.</p>
-              )}
-              {sessions.map((s) => (
-                <div
-                  key={s.id}
-                  className={`card-outline flex items-center justify-between ${
-                    selected?.id === s.id ? "border-ink" : ""
-                  }`}
-                >
-                  <button className="text-left" onClick={() => setSelected(s)}>
-                    <p className="text-title-sm text-ink">{s.course_name}</p>
-                    <p className="text-body-sm text-muted">
-                      {new Date(s.start_time.replace(" ", "T") + "Z").toLocaleString("id-ID")}
-                    </p>
+            {classes.length === 0 ? (
+              <div className="card text-center text-[0.9rem] text-muted">
+                Belum ada kelas. Buat kelas pertamamu.
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {classes.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => openClass(c)}
+                    className="rounded-lg border border-border bg-surface p-5 text-left transition-all hover:-translate-y-0.5 hover:border-accent"
+                  >
+                    <h3 className="display text-base">{c.name}</h3>
+                    <p className="mt-1 text-[0.82rem] text-muted">{c.mata_kuliah}</p>
+                    <div className="mt-3 flex items-center justify-between">
+                      <span className="kode-badge">{c.kode_kelas}</span>
+                      <span className="text-[0.78rem] text-muted">{c.member_count ?? 0} mhs</span>
+                    </div>
                   </button>
-                  <div className="flex items-center gap-sm">
-                    <span
-                      className={`rounded-pill px-sm py-xxs text-caption ${
-                        s.is_open ? "bg-success/15 text-success" : "bg-surface-card text-muted"
-                      }`}
-                    >
-                      {s.is_open ? "Terbuka" : "Ditutup"}
-                    </span>
-                    {!!s.is_open && (
-                      <button
-                        className="text-body-sm font-semibold text-error"
-                        onClick={() => closeSession(s.id)}
-                      >
-                        Tutup
-                      </button>
-                    )}
-                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* CREATE CLASS */}
+        {view === "create" && (
+          <div className="max-w-md">
+            <button className="mb-4 text-[0.85rem] text-muted hover:text-accent" onClick={() => setView("classes")}>
+              ← Kelas Saya
+            </button>
+            <div className="card">
+              <h2 className="display mb-4 text-lg">Buat Kelas Baru</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="label">Nama Kelas</label>
+                  <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Komputasi Awan 2026" />
                 </div>
-              ))}
+                <div>
+                  <label className="label">Mata Kuliah</label>
+                  <input className="input" value={form.mata_kuliah} onChange={(e) => setForm({ ...form, mata_kuliah: e.target.value })} placeholder="ET3204" />
+                </div>
+                {createMsg && <p className={createMsg.ok ? "msg-success" : "msg-error"}>{createMsg.text}</p>}
+                <button className="btn-primary" onClick={createClass}>
+                  Buat Kelas
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Detail: analytics + roster */}
-        {selected && analytics && (
-          <section className="mt-section">
-            <div className="flex flex-wrap items-center justify-between gap-sm">
-              <h2 className="text-display-sm font-display text-ink">{analytics.course_name}</h2>
-              <button className="btn-secondary" onClick={exportCsv}>
+        {/* CLASS DETAIL */}
+        {view === "detail" && currentClass && (
+          <>
+            <button className="mb-2 text-[0.85rem] text-muted hover:text-accent" onClick={() => setView("classes")}>
+              ← Kelas Saya
+            </button>
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h1 className="display text-2xl">{currentClass.name}</h1>
+                <p className="text-[0.85rem] text-muted">
+                  {currentClass.mata_kuliah} · Kode <span className="kode-badge">{currentClass.kode_kelas}</span>
+                </p>
+              </div>
+              <button className="btn-primary btn-sm" onClick={openSession}>
+                ▶ Buka Sesi Absensi
+              </button>
+            </div>
+
+            <div className="card overflow-x-auto">
+              <h3 className="display mb-4 text-base">Sesi Absensi</h3>
+              <table className="w-full text-[0.88rem]">
+                <thead>
+                  <tr className="border-b border-border text-left text-muted">
+                    <th className="py-2 font-medium">Nama Sesi</th>
+                    <th className="py-2 font-medium">Status</th>
+                    <th className="py-2 font-medium">Dibuat</th>
+                    <th className="py-2 font-medium">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sessions.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 text-center text-muted">Belum ada sesi</td>
+                    </tr>
+                  ) : (
+                    sessions.map((s) => (
+                      <tr key={s.id} className="border-b border-border/50">
+                        <td className="py-3">{s.name}</td>
+                        <td className="py-3">
+                          <span className={s.is_active ? "text-success" : "text-muted"}>
+                            {s.is_active ? "● Aktif" : "○ Selesai"}
+                          </span>
+                        </td>
+                        <td className="py-3 text-[0.82rem] text-muted">
+                          {new Date(s.created_at.replace(" ", "T") + "Z").toLocaleString("id-ID")}
+                        </td>
+                        <td className="py-3">
+                          <div className="flex gap-2">
+                            {!!s.is_active && (
+                              <button className="btn-danger btn-sm" onClick={() => closeSession(s.id)}>
+                                Tutup
+                              </button>
+                            )}
+                            <button className="btn-ghost btn-sm" onClick={() => viewRecap(s)}>
+                              Rekap
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {/* RECAP */}
+        {view === "recap" && recapSession && (
+          <>
+            <button className="mb-2 text-[0.85rem] text-muted hover:text-accent" onClick={() => setView("detail")}>
+              ← {currentClass?.name}
+            </button>
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h1 className="display text-2xl">Rekap Kehadiran</h1>
+                <p className="text-[0.85rem] text-muted">{recapSession.name} · auto-refresh 5s</p>
+              </div>
+              <button className="btn-ghost btn-sm" onClick={exportCsv}>
                 Export CSV
               </button>
             </div>
 
-            <div className="mt-lg grid gap-lg md:grid-cols-2">
-              {/* Stat cards + chart */}
-              <div className="card-outline">
-                <div className="grid grid-cols-3 gap-sm text-center">
-                  <Stat label="Hadir" value={analytics.present} pct={analytics.percentages.present} />
-                  <Stat label="Telat" value={analytics.late} pct={analytics.percentages.late} />
-                  <Stat label="Absen" value={analytics.absent} pct={analytics.percentages.absent} />
-                </div>
-                <div className="mt-lg h-56">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={chartData}>
-                      <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                      <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
-                      <Tooltip cursor={{ fill: "#f5f5f5" }} />
-                      <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                        {chartData.map((d, i) => (
-                          <Cell key={i} fill={d.color} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Roster */}
-              <div className="card-outline">
-                <div className="mb-sm flex items-center justify-between">
-                  <h3 className="text-title-sm text-ink">Daftar Hadir</h3>
-                  <span className="text-caption text-muted-soft">Auto-refresh 5s</span>
-                </div>
-                <div className="max-h-64 overflow-auto">
-                  <table className="w-full text-body-sm">
-                    <thead>
-                      <tr className="border-b border-hairline text-left text-muted">
-                        <th className="py-xs font-medium">Nama</th>
-                        <th className="py-xs font-medium">Jam</th>
-                        <th className="py-xs font-medium">Status</th>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-[0.88rem]">
+                <thead>
+                  <tr className="border-b border-border text-left text-muted">
+                    <th className="py-2 font-medium">Foto</th>
+                    <th className="py-2 font-medium">Nama</th>
+                    <th className="py-2 font-medium">NIM</th>
+                    <th className="py-2 font-medium">Jarak</th>
+                    <th className="py-2 font-medium">Waktu</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recap.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-muted">Belum ada yang absen</td>
+                    </tr>
+                  ) : (
+                    recap.map((r) => (
+                      <tr key={r.id} className="border-b border-border/50">
+                        <td className="py-2">
+                          {r.photo_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={r.photo_url} alt="foto" className="h-12 w-12 rounded-md border border-border object-cover" />
+                          ) : (
+                            <div className="flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface2 text-[0.65rem] text-muted">
+                              No foto
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2">{r.name}</td>
+                        <td className="py-2 font-mono text-muted">{r.student_id ?? "-"}</td>
+                        <td className="py-2 text-success">{r.match_distance ?? "-"}</td>
+                        <td className="py-2 text-[0.82rem] text-muted">
+                          {new Date(r.checkin_time.replace(" ", "T") + "Z").toLocaleString("id-ID")}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {roster.length === 0 && (
-                        <tr>
-                          <td colSpan={3} className="py-md text-center text-muted">
-                            Belum ada yang check-in.
-                          </td>
-                        </tr>
-                      )}
-                      {roster.map((r) => (
-                        <tr key={r.id} className="border-b border-hairline-soft">
-                          <td className="py-xs text-ink">{r.student_name}</td>
-                          <td className="py-xs text-muted">
-                            {new Date(r.checkin_time.replace(" ", "T") + "Z").toLocaleTimeString(
-                              "id-ID"
-                            )}
-                          </td>
-                          <td className="py-xs">
-                            <span
-                              className={`rounded-pill px-sm py-xxs text-caption ${
-                                r.status === "present"
-                                  ? "bg-success/15 text-success"
-                                  : "bg-warning/15 text-warning"
-                              }`}
-                            >
-                              {r.status === "present" ? "Hadir" : "Telat"}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
-          </section>
+          </>
         )}
-      </Container>
-      <Footer />
-    </>
-  );
-}
-
-function Stat({ label, value, pct }: { label: string; value: number; pct: number }) {
-  return (
-    <div>
-      <p className="text-display-sm font-display text-ink">{value}</p>
-      <p className="text-body-sm text-muted">{label}</p>
-      <p className="text-caption text-muted-soft">{pct}%</p>
+      </main>
     </div>
   );
 }

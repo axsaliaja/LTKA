@@ -3,98 +3,77 @@ import { z } from "zod";
 import { query, execute } from "../lib/db";
 import { authRequired, requireRole } from "../middleware/auth";
 import { euclideanDistance, isValidDescriptor } from "../lib/euclidean";
+import { uploadAttendancePhoto, getPhotoUrl } from "../lib/s3";
 import { config } from "../config";
 
 export const attendanceRouter = Router();
 
 const checkinSchema = z.object({
-  session_id: z.string().min(1),
+  session_id: z.number().int(),
   descriptor: z.array(z.number()).length(128),
-  liveness_passed: z.boolean(),
+  photo: z.string().optional(), // data-URL JPEG snapshot
 });
 
 /**
- * POST /attendance/checkin  (authoritative, server-side validation)
+ * POST /attendance/checkin  (student, authoritative server-side validation)
  *
- * 1. Validate JWT (middleware).
- * 2. Load session; reject if closed or outside [start_time, end_time].
- * 3. Reject if liveness_passed !== true.
- * 4. Compute Euclidean distance between submitted descriptor and the stored
- *    enrollment descriptor; reject if > MATCH_THRESHOLD.
- * 5. status = "late" if now > start_time + late_threshold, else "present".
- * 6. INSERT into attendance (UNIQUE(session_id, student_id) blocks duplicates).
- *
- * The client is never trusted: liveness and match are both re-checked here.
+ * 1. Session must exist and be active.
+ * 2. Student must be a member of the session's class.
+ * 3. Student must have an enrolled face descriptor.
+ * 4. Euclidean distance(submitted, stored) <= MATCH_THRESHOLD, else reject.
+ * 5. Store snapshot photo to S3; INSERT (UNIQUE blocks double check-in).
  */
-attendanceRouter.post("/checkin", authRequired, async (req, res) => {
+attendanceRouter.post("/checkin", authRequired, requireRole("student"), async (req, res) => {
   const parsed = checkinSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+  if (!parsed.success || !isValidDescriptor(parsed.data.descriptor)) {
+    res.status(400).json({ error: "Input tidak valid", reason: "input" });
     return;
   }
-  const { session_id, descriptor, liveness_passed } = parsed.data;
-  const studentId = req.user!.sub;
+  const { session_id, descriptor, photo } = parsed.data;
+  const userId = req.user!.sub;
 
-  // (3) Liveness gate — refuse a still photo / spoof.
-  if (liveness_passed !== true) {
-    res.status(400).json({ error: "Liveness check failed", reason: "liveness" });
-    return;
-  }
-  if (!isValidDescriptor(descriptor)) {
-    res.status(400).json({ error: "Invalid face descriptor", reason: "descriptor" });
-    return;
-  }
-
-  // (2) Session must exist, be open, and within its time window.
-  const sessions = await query<{
-    id: string;
-    start_time: string;
-    end_time: string;
-    late_threshold_minutes: number;
-    is_open: number;
-  }>(
-    "SELECT id, start_time, end_time, late_threshold_minutes, is_open FROM class_sessions WHERE id = ? LIMIT 1",
+  // (1) Active session + its class.
+  const sessions = await query<{ id: number; class_id: number; is_active: number }>(
+    "SELECT id, class_id, is_active FROM sessions WHERE id = ? LIMIT 1",
     [session_id]
   );
   const session = sessions[0];
   if (!session) {
-    res.status(404).json({ error: "Session not found", reason: "session" });
+    res.status(404).json({ error: "Sesi tidak ditemukan", reason: "session" });
     return;
   }
-  if (!session.is_open) {
-    res.status(403).json({ error: "Session is closed", reason: "closed" });
-    return;
-  }
-
-  const now = new Date();
-  // DB stores naive datetimes (dateStrings:true). Interpret as UTC.
-  const start = new Date(session.start_time.replace(" ", "T") + "Z");
-  const end = new Date(session.end_time.replace(" ", "T") + "Z");
-  if (now < start || now > end) {
-    res.status(403).json({ error: "Outside session time window", reason: "time_window" });
+  if (!session.is_active) {
+    res.status(403).json({ error: "Sesi sudah ditutup", reason: "closed" });
     return;
   }
 
-  // (4) Face match against stored enrollment descriptor.
-  const students = await query<{ face_descriptor: number[] }>(
-    "SELECT face_descriptor FROM students WHERE id = ? LIMIT 1",
-    [studentId]
+  // (2) Membership.
+  const member = await query("SELECT id FROM class_members WHERE class_id = ? AND student_id = ?", [
+    session.class_id,
+    userId,
+  ]);
+  if (member.length === 0) {
+    res.status(403).json({ error: "Kamu tidak terdaftar di kelas ini", reason: "not_member" });
+    return;
+  }
+
+  // (3) Enrolled face.
+  const users = await query<{ face_descriptor: number[] | string | null }>(
+    "SELECT face_descriptor FROM users WHERE id = ? LIMIT 1",
+    [userId]
   );
-  const student = students[0];
-  if (!student) {
-    res.status(404).json({ error: "Student not enrolled", reason: "not_enrolled" });
+  const stored = users[0]?.face_descriptor;
+  if (!stored) {
+    res.status(400).json({ error: "Wajah belum di-enroll", reason: "not_enrolled" });
     return;
   }
-  // mysql2 returns JSON columns already parsed; guard for string just in case.
-  const stored =
-    typeof student.face_descriptor === "string"
-      ? JSON.parse(student.face_descriptor)
-      : student.face_descriptor;
+  const storedArr = typeof stored === "string" ? JSON.parse(stored) : stored;
 
-  const distance = euclideanDistance(descriptor, stored);
+  // (4) Face match.
+  const distance = euclideanDistance(descriptor, storedArr);
   if (distance > config.matchThreshold) {
     res.status(403).json({
-      error: "Face does not match enrolled identity",
+      error: "Wajah tidak cocok dengan identitas terdaftar",
       reason: "no_match",
       distance: Number(distance.toFixed(4)),
       threshold: config.matchThreshold,
@@ -102,72 +81,98 @@ attendanceRouter.post("/checkin", authRequired, async (req, res) => {
     return;
   }
 
-  // (5) Determine present vs late.
-  const lateCutoff = new Date(start.getTime() + session.late_threshold_minutes * 60_000);
-  const status: "present" | "late" = now > lateCutoff ? "late" : "present";
+  // (5) Snapshot + insert.
+  let photoKey: string | null = null;
+  if (photo) {
+    try {
+      photoKey = await uploadAttendancePhoto(session_id, userId, photo);
+    } catch (e) {
+      console.error("S3 attendance upload failed:", e);
+    }
+  }
 
-  // (6) Insert; UNIQUE constraint prevents double check-in.
   try {
     await execute(
-      `INSERT INTO attendance
-         (session_id, student_id, status, match_distance, liveness_passed)
-       VALUES (?, ?, ?, ?, ?)`,
-      [session_id, studentId, status, Number(distance.toFixed(4)), 1]
+      `INSERT INTO attendances (session_id, user_id, match_distance, photo_s3_key)
+       VALUES (?, ?, ?, ?)`,
+      [session_id, userId, Number(distance.toFixed(4)), photoKey]
     );
   } catch (e: any) {
     if (e?.code === "ER_DUP_ENTRY") {
-      res.status(409).json({ error: "Already checked in for this session", reason: "duplicate" });
+      res.status(409).json({ error: "Kamu sudah absen di sesi ini", reason: "duplicate" });
       return;
     }
     throw e;
   }
 
   res.status(201).json({
-    status,
+    message: "Absensi berhasil",
     distance: Number(distance.toFixed(4)),
     threshold: config.matchThreshold,
-    checkin_time: now.toISOString(),
+    checkin_time: new Date().toISOString(),
   });
 });
 
 /**
- * GET /attendance/session/:sessionId  (lecturer)
- * Roster of who checked in for a session.
+ * GET /attendance/session/:sessionId  (lecturer owner)
+ * Recap with presigned snapshot URLs.
  */
 attendanceRouter.get(
   "/session/:sessionId",
   authRequired,
   requireRole("lecturer"),
   async (req, res) => {
-    const rows = await query(
-      `SELECT a.id, a.student_id, st.name AS student_name, a.checkin_time,
-              a.status, a.match_distance, a.liveness_passed
-         FROM attendance a
-         JOIN students st ON st.id = a.student_id
-        WHERE a.session_id = ?
-        ORDER BY a.checkin_time ASC`,
-      [req.params.sessionId]
+    const sessionId = Number(req.params.sessionId);
+    // Authorize ownership.
+    const owns = await query(
+      `SELECT s.id FROM sessions s JOIN classes c ON c.id = s.class_id
+        WHERE s.id = ? AND c.lecturer_id = ?`,
+      [sessionId, req.user!.sub]
     );
-    res.json(rows);
+    if (owns.length === 0) {
+      res.status(403).json({ error: "Tidak punya akses ke sesi ini" });
+      return;
+    }
+
+    const rows = await query<{
+      id: number;
+      name: string;
+      student_id: string | null;
+      checkin_time: string;
+      match_distance: string | null;
+      photo_s3_key: string | null;
+    }>(
+      `SELECT a.id, u.name, u.student_id, a.checkin_time, a.match_distance, a.photo_s3_key
+         FROM attendances a JOIN users u ON u.id = a.user_id
+        WHERE a.session_id = ? ORDER BY a.checkin_time ASC`,
+      [sessionId]
+    );
+
+    const withUrls = await Promise.all(
+      rows.map(async (r) => ({
+        id: r.id,
+        name: r.name,
+        student_id: r.student_id,
+        checkin_time: r.checkin_time,
+        match_distance: r.match_distance,
+        photo_url: r.photo_s3_key ? await getPhotoUrl(r.photo_s3_key) : null,
+      }))
+    );
+    res.json(withUrls);
   }
 );
 
-/**
- * GET /attendance/student/:studentId
- * Attendance history for a student. Students may only see their own.
- */
-attendanceRouter.get("/student/:studentId", authRequired, async (req, res) => {
-  if (req.user!.role !== "lecturer" && req.user!.sub !== req.params.studentId) {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
+/** GET /attendance/mine  (student) — own attendance history. */
+attendanceRouter.get("/mine", authRequired, requireRole("student"), async (req, res) => {
   const rows = await query(
-    `SELECT a.id, a.session_id, s.course_name, a.checkin_time, a.status, a.match_distance
-       FROM attendance a
-       JOIN class_sessions s ON s.id = a.session_id
-      WHERE a.student_id = ?
+    `SELECT a.id, s.name AS session_name, c.name AS class_name, c.mata_kuliah,
+            a.checkin_time, a.match_distance
+       FROM attendances a
+       JOIN sessions s ON s.id = a.session_id
+       JOIN classes c ON c.id = s.class_id
+      WHERE a.user_id = ?
       ORDER BY a.checkin_time DESC`,
-    [req.params.studentId]
+    [req.user!.sub]
   );
   res.json(rows);
 });

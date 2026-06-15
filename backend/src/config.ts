@@ -35,4 +35,11 @@ export const config = {
   matchThreshold: parseFloat(process.env.MATCH_THRESHOLD ?? "0.5"),
 
   corsOrigin: process.env.CORS_ORIGIN ?? "*",
+
+  // Institutional email domains (Google-Classroom-style access control).
+  // Empty string disables the check for that role.
+  emailDomains: {
+    lecturer: process.env.LECTURER_EMAIL_DOMAIN ?? "itb.ac.id",
+    student: process.env.STUDENT_EMAIL_DOMAIN ?? "mahasiswa.itb.ac.id",
+  },
 };

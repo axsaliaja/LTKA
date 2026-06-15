@@ -3,10 +3,12 @@
 /** Minimal client-side auth/session storage (localStorage-backed). */
 
 export interface AuthUser {
-  id: string;
+  id: number;
   name: string;
   email: string;
   role: "student" | "lecturer";
+  student_id?: string | null;
+  is_face_registered?: boolean;
 }
 
 export function saveAuth(token: string, user: AuthUser) {
@@ -23,6 +25,11 @@ export function getUser(): AuthUser | null {
   } catch {
     return null;
   }
+}
+
+export function patchUser(patch: Partial<AuthUser>) {
+  const u = getUser();
+  if (u) localStorage.setItem("user", JSON.stringify({ ...u, ...patch }));
 }
 
 export function logout() {

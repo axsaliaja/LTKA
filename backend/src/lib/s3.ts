@@ -39,6 +39,35 @@ export async function uploadEnrollmentPhoto(
   return key;
 }
 
+/**
+ * Upload an attendance snapshot (the live photo taken at check-in) to S3.
+ * Returns the object key (stored in attendances.photo_s3_key).
+ */
+export async function uploadAttendancePhoto(
+  sessionId: number,
+  userId: number,
+  dataUrl: string
+): Promise<string | null> {
+  if (!config.s3.bucket || !dataUrl) return null;
+
+  const match = /^data:(image\/\w+);base64,(.+)$/.exec(dataUrl);
+  if (!match) return null;
+  const contentType = match[1];
+  const buffer = Buffer.from(match[2], "base64");
+  const ext = contentType === "image/png" ? "png" : "jpg";
+  const key = `attendance/${sessionId}/${userId}_${Date.now()}.${ext}`;
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: config.s3.bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+    })
+  );
+  return key;
+}
+
 /** Generate a short-lived presigned GET URL for a private enrollment photo. */
 export async function getPhotoUrl(key: string): Promise<string | null> {
   if (!config.s3.bucket || !key) return null;

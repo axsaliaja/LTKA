@@ -3,9 +3,9 @@ import cors from "cors";
 import { config } from "./config";
 import { pool } from "./lib/db";
 import { authRouter } from "./routes/auth";
+import { classesRouter } from "./routes/classes";
 import { sessionsRouter } from "./routes/sessions";
 import { attendanceRouter } from "./routes/attendance";
-import { analyticsRouter } from "./routes/analytics";
 
 const app = express();
 
@@ -28,9 +28,9 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use("/auth", authRouter);
+app.use("/classes", classesRouter);
 app.use("/sessions", sessionsRouter);
 app.use("/attendance", attendanceRouter);
-app.use("/analytics", analyticsRouter);
 
 // Centralized error handler.
 app.use(
