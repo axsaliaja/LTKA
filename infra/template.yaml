@@ -70,7 +70,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 3306
           ToPort: 3306
-          SourceSecurityGroupId: !Ref EC2SecurityGroup
+          SourceSecurityGroupId: !GetAtt EC2SecurityGroup.GroupId
           Description: MySQL from API server
       Tags:
         - Key: Name
@@ -108,7 +108,7 @@ Resources:
       BackupRetentionPeriod: 0
       MonitoringInterval: 0
       VPCSecurityGroups:
-        - !Ref DBSecurityGroup
+        - !GetAtt DBSecurityGroup.GroupId
       Tags:
         - Key: Name
           Value: absensi-rds
@@ -123,7 +123,7 @@ Resources:
       KeyName: !Ref KeyName
       IamInstanceProfile: !Ref InstanceProfileName
       SecurityGroupIds:
-        - !Ref EC2SecurityGroup
+        - !GetAtt EC2SecurityGroup.GroupId
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
