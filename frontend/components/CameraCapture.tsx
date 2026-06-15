@@ -42,6 +42,7 @@ export default function CameraCapture({
   const [status, setStatus] = useState("Memuat model & kamera…");
   const [faceVisible, setFaceVisible] = useState(false);
   const [blinks, setBlinks] = useState(0);
+  const [ear, setEar] = useState(0);
   const [ready, setReady] = useState(false);
 
   const liveness = requiredBlinks > 0;
@@ -87,8 +88,9 @@ export default function CameraCapture({
     if (det) {
       setFaceVisible(true);
       if (liveness) {
-        const ear = averageEAR(det.landmarks);
-        blinkRef.current.update(ear);
+        const earValue = averageEAR(det.landmarks);
+        blinkRef.current.update(earValue);
+        setEar(earValue);
         const count = blinkRef.current.blinks;
         setBlinks(count);
         if (count >= requiredBlinks) {
@@ -166,10 +168,16 @@ export default function CameraCapture({
       </p>
 
       {liveness ? (
-        <div className="flex items-center gap-xs text-caption text-muted">
-          <span>Kedipan terdeteksi:</span>
-          <span className="font-mono font-semibold text-ink">
-            {blinks}/{requiredBlinks}
+        <div className="flex items-center gap-md text-caption text-muted">
+          <span>
+            Kedipan:{" "}
+            <span className="font-mono font-semibold text-ink">
+              {blinks}/{requiredBlinks}
+            </span>
+          </span>
+          <span>
+            EAR:{" "}
+            <span className="font-mono font-semibold text-ink">{ear.toFixed(2)}</span>
           </span>
         </div>
       ) : (
