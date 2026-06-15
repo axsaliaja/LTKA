@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+backend/dist/
+frontend/.next/
+frontend/out/
+
+# Env files (keep .env.example)
+.env
+.env.local
+*.env
+!.env.example
+
+# face-api.js model weights (download separately — see frontend/public/models/README.md)
+frontend/public/models/*
+!frontend/public/models/README.md
+!frontend/public/models/.gitkeep
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db

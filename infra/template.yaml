@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Face-recognition attendance system for AWS Academy Cloud Foundations Sandbox.
+  Creates Security Groups, an S3 bucket, an RDS MySQL instance, and an EC2
+  instance that bootstraps the Express API + Caddy (HTTPS via nip.io).
+  Uses the pre-existing LabInstanceProfile / LabRole — NO new IAM is created.
+
+# ------------------------------------------------------------------
+# Parameters  (fill the ones marked << FILL >> at deploy time)
+# ------------------------------------------------------------------
+Parameters:
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: "Master password for the RDS MySQL instance. << FILL >>"
+
+  RepoUrl:
+    Type: String
+    Description: "Public GitHub repo URL to clone on the EC2 instance. << FILL >>"
+    Default: "https://github.com/USERNAME/REPO.git"
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: vockey
+    Description: "EC2 key pair (sandbox provides 'vockey')."
+
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    Description: "Pre-existing instance profile granted by the lab. Do not change."
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: "Latest Amazon Linux 2023 AMI (resolved via SSM public parameter)."
+
+# ------------------------------------------------------------------
+Resources:
+  # --- Networking: use the default VPC. Security groups only. ---
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: API server - allow HTTP/HTTPS/SSH from anywhere.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP (Caddy / Let's Encrypt HTTP-01)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS (Caddy)
+      Tags:
+        - Key: Name
+          Value: absensi-ec2-sg
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS MySQL - allow 3306 only from the EC2 security group.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+          Description: MySQL from API server
+      Tags:
+        - Key: Name
+          Value: absensi-db-sg
+
+  # --- S3 bucket for private enrollment photos ---
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # --- RDS MySQL (Single-AZ, gp2, no enhanced monitoring) ---
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      Engine: mysql
+      EngineVersion: "8.0"
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: "20"
+      StorageType: gp2
+      DBName: absensi
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      MultiAZ: false
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 0
+      MonitoringInterval: 0
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: absensi-rds
+
+  # --- EC2 API server (bootstraps everything via user-data) ---
+  ApiServer:
+    Type: AWS::EC2::Instance
+    DependsOn: DBInstance
+    Properties:
+      InstanceType: t3.small
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref InstanceProfileName
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp2
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: absensi-api
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          # Export the values the bootstrap script needs, then run it.
+          export REPO_URL="${RepoUrl}"
+          export DB_HOST="${DBInstance.Endpoint.Address}"
+          export DB_PASS="${DBPassword}"
+          export S3_BUCKET="${PhotoBucket}"
+          export AWS_REGION="${AWS::Region}"
+          # Fetch the bootstrap script from the repo and execute it.
+          curl -fsSL "$(echo "$REPO_URL" | sed -e 's#\.git$##' -e 's#github.com#raw.githubusercontent.com#')/main/infra/bootstrap.sh" -o /tmp/bootstrap.sh || \
+            (cd /tmp && git clone "$REPO_URL" repo && cp repo/infra/bootstrap.sh /tmp/bootstrap.sh)
+          bash /tmp/bootstrap.sh 2>&1 | tee /var/log/absensi-bootstrap.log
+
+# ------------------------------------------------------------------
+Outputs:
+  ApiPublicIp:
+    Description: Public IP of the EC2 API server.
+    Value: !GetAtt ApiServer.PublicIp
+
+  ApiUrl:
+    Description: HTTPS API base URL (set this as NEXT_PUBLIC_API_URL in Vercel).
+    Value: !Sub
+      - "https://${IpDashed}.nip.io"
+      - IpDashed: !Join ["-", !Split [".", !GetAtt ApiServer.PublicIp]]
+
+  DBEndpoint:
+    Description: RDS MySQL endpoint.
+    Value: !GetAtt DBInstance.Endpoint.Address
+
+  PhotoBucketName:
+    Description: S3 bucket for enrollment photos.
+    Value: !Ref PhotoBucket

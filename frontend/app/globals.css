@@ -1,0 +1,60 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  background-color: #ffffff; /* canvas */
+  color: #374151; /* body */
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  /* Display headings substitute Cal Sans with Inter 600 + negative tracking. */
+  .display-xl {
+    @apply text-display-xl font-display text-ink;
+  }
+  .display-lg {
+    @apply text-display-lg font-display text-ink;
+  }
+  .display-md {
+    @apply text-display-md font-display text-ink;
+  }
+  .display-sm {
+    @apply text-display-sm font-display text-ink;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex h-10 items-center justify-center rounded-md px-5 text-body-sm font-semibold transition-colors disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-primary text-on-primary hover:bg-primary-active active:bg-primary-active disabled:bg-primary-disabled disabled:text-muted;
+  }
+  .btn-secondary {
+    @apply btn border border-hairline bg-canvas text-ink hover:bg-surface-soft;
+  }
+
+  /* Inputs */
+  .input {
+    @apply h-10 w-full rounded-md border border-hairline bg-canvas px-[14px] text-body-md text-ink outline-none placeholder:text-muted-soft focus:border-ink;
+  }
+  .label {
+    @apply mb-xs block text-body-sm font-medium text-ink;
+  }
+
+  /* Cards */
+  .card {
+    @apply rounded-lg bg-surface-card p-xl;
+  }
+  .card-outline {
+    @apply rounded-lg border border-hairline bg-canvas p-lg;
+  }
+}
