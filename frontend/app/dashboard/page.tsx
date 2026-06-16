@@ -39,6 +39,7 @@ export default function DashboardPage() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [recapSession, setRecapSession] = useState<SessionItem | null>(null);
   const [recap, setRecap] = useState<RecapRow[]>([]);
+  const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const [error, setError] = useState("");
 
   const [form, setForm] = useState({ name: "", mata_kuliah: "" });
@@ -310,7 +311,13 @@ export default function DashboardPage() {
                         <td className="py-2">
                           {r.photo_url ? (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={r.photo_url} alt="foto" className="h-12 w-12 rounded-md border border-border object-cover" />
+                            <img
+                              src={r.photo_url}
+                              alt={`foto absensi ${r.name}`}
+                              title="Klik untuk perbesar"
+                              onClick={() => setPreview({ url: r.photo_url!, name: r.name })}
+                              className="h-12 w-12 cursor-pointer rounded-md border border-border object-cover transition-transform hover:scale-105 hover:border-accent"
+                            />
                           ) : (
                             <div className="flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface2 text-[0.65rem] text-muted">
                               No foto
@@ -332,6 +339,31 @@ export default function DashboardPage() {
           </>
         )}
       </main>
+
+      {/* Photo preview lightbox */}
+      {preview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setPreview(null)}
+        >
+          <div className="relative max-h-[90vh] max-w-lg animate-fadeUp" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="absolute -right-3 -top-3 flex h-8 w-8 items-center justify-center rounded-pill border border-border bg-surface text-lg text-muted hover:text-text"
+              onClick={() => setPreview(null)}
+              aria-label="Tutup"
+            >
+              ×
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={preview.url}
+              alt={`foto absensi ${preview.name}`}
+              className="max-h-[80vh] w-auto rounded-lg border border-border object-contain"
+            />
+            <p className="mt-2 text-center text-[0.85rem] text-muted">{preview.name}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
