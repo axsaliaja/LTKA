@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AppHeader } from "@/components/Chrome";
+import { AppHeader, Loading } from "@/components/Chrome";
 import CameraCapture, { CaptureResult } from "@/components/CameraCapture";
 import { api } from "@/lib/api";
 import { getUser } from "@/lib/auth";
@@ -20,6 +20,14 @@ interface SessionItem {
   is_active: number;
   created_at: string;
 }
+interface HistoryRow {
+  id: number;
+  session_name: string;
+  class_name: string;
+  mata_kuliah: string;
+  checkin_time: string;
+  match_distance: string | null;
+}
 
 const REASONS: Record<string, string> = {
   no_match: "Wajah tidak cocok dengan identitas terdaftar.",
@@ -30,7 +38,7 @@ const REASONS: Record<string, string> = {
   session: "Sesi tidak ditemukan.",
 };
 
-type Tab = "attend" | "classes" | "join";
+type Tab = "attend" | "classes" | "riwayat" | "join";
 
 export default function StudentPage() {
   const router = useRouter();
@@ -42,6 +50,10 @@ export default function StudentPage() {
   const [result, setResult] = useState<string>("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loadingClasses, setLoadingClasses] = useState(true);
+
+  const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   const [joinCode, setJoinCode] = useState("");
   const [joinMsg, setJoinMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -55,10 +67,24 @@ export default function StudentPage() {
   }, []);
 
   const loadClasses = async () => {
+    setLoadingClasses(true);
     try {
       setClasses(await api.get<ClassItem[]>("/classes/mine"));
     } catch (e: any) {
       setError(e?.error ?? "Gagal memuat kelas.");
+    } finally {
+      setLoadingClasses(false);
+    }
+  };
+
+  const loadHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      setHistory(await api.get<HistoryRow[]>("/attendance/mine"));
+    } catch (e: any) {
+      setError(e?.error ?? "Gagal memuat riwayat.");
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
@@ -115,6 +141,7 @@ export default function StudentPage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "attend", label: "Absensi" },
     { id: "classes", label: "Kelas Saya" },
+    { id: "riwayat", label: "Riwayat" },
     { id: "join", label: "Join Kelas" },
   ];
 
@@ -132,6 +159,7 @@ export default function StudentPage() {
                 setActiveSession(null);
                 setResult("");
                 setError("");
+                if (t.id === "riwayat") loadHistory();
               }}
               className={`flex-1 rounded-sm py-2 text-[0.88rem] font-medium transition-colors ${
                 tab === t.id ? "bg-bg text-text shadow-[0_0_0_1px_#222230]" : "text-muted"
@@ -189,6 +217,8 @@ export default function StudentPage() {
                   </div>
                 )}
               </div>
+            ) : loadingClasses ? (
+              <Loading label="Memuat kelas…" />
             ) : classes.length === 0 ? (
               <div className="card text-center text-[0.9rem] text-muted">
                 Belum join kelas. Buka tab <b className="text-text">Join Kelas</b>.
@@ -219,7 +249,9 @@ export default function StudentPage() {
         {/* KELAS SAYA */}
         {tab === "classes" && (
           <div className="space-y-2">
-            {classes.length === 0 ? (
+            {loadingClasses ? (
+              <Loading label="Memuat kelas…" />
+            ) : classes.length === 0 ? (
               <div className="card text-center text-[0.9rem] text-muted">Belum ada kelas.</div>
             ) : (
               classes.map((c) => (
@@ -232,6 +264,34 @@ export default function StudentPage() {
                     </p>
                   </div>
                   <span className="kode-badge">{c.kode_kelas}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* RIWAYAT ABSENSI */}
+        {tab === "riwayat" && (
+          <div className="space-y-2">
+            {loadingHistory ? (
+              <Loading label="Memuat riwayat…" />
+            ) : history.length === 0 ? (
+              <div className="card text-center text-[0.9rem] text-muted">Belum ada riwayat absensi.</div>
+            ) : (
+              history.map((h) => (
+                <div key={h.id} className="flex items-center justify-between rounded-lg border border-border bg-surface p-4">
+                  <div>
+                    <p className="font-medium">{h.class_name}</p>
+                    <p className="text-[0.82rem] text-muted">
+                      {h.mata_kuliah} · {h.session_name}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <span className="rounded-pill bg-success/15 px-2 py-0.5 text-[0.75rem] text-success">Hadir</span>
+                    <p className="mt-1 text-[0.78rem] text-muted">
+                      {new Date(h.checkin_time.replace(" ", "T") + "Z").toLocaleString("id-ID")}
+                    </p>
+                  </div>
                 </div>
               ))
             )}

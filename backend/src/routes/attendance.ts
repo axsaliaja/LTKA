@@ -123,9 +123,9 @@ attendanceRouter.get(
   requireRole("lecturer"),
   async (req, res) => {
     const sessionId = Number(req.params.sessionId);
-    // Authorize ownership.
-    const owns = await query(
-      `SELECT s.id FROM sessions s JOIN classes c ON c.id = s.class_id
+    // Authorize ownership and resolve the session's class.
+    const owns = await query<{ class_id: number }>(
+      `SELECT s.class_id FROM sessions s JOIN classes c ON c.id = s.class_id
         WHERE s.id = ? AND c.lecturer_id = ?`,
       [sessionId, req.user!.sub]
     );
@@ -133,32 +133,51 @@ attendanceRouter.get(
       res.status(403).json({ error: "Tidak punya akses ke sesi ini" });
       return;
     }
+    const classId = owns[0].class_id;
 
+    // Full roster of the class LEFT JOINed with this session's attendance, so
+    // students who have NOT checked in still appear (status "absent").
     const rows = await query<{
-      id: number;
+      user_id: number;
       name: string;
       student_id: string | null;
-      checkin_time: string;
+      checkin_time: string | null;
       match_distance: string | null;
       photo_s3_key: string | null;
     }>(
-      `SELECT a.id, u.name, u.student_id, a.checkin_time, a.match_distance, a.photo_s3_key
-         FROM attendances a JOIN users u ON u.id = a.user_id
-        WHERE a.session_id = ? ORDER BY a.checkin_time ASC`,
-      [sessionId]
+      `SELECT u.id AS user_id, u.name, u.student_id,
+              a.checkin_time, a.match_distance, a.photo_s3_key
+         FROM class_members cm
+         JOIN users u ON u.id = cm.student_id
+         LEFT JOIN attendances a ON a.user_id = u.id AND a.session_id = ?
+        WHERE cm.class_id = ?
+        ORDER BY (a.checkin_time IS NULL), a.checkin_time ASC, u.name ASC`,
+      [sessionId, classId]
     );
 
-    const withUrls = await Promise.all(
+    const roster = await Promise.all(
       rows.map(async (r) => ({
-        id: r.id,
+        user_id: r.user_id,
         name: r.name,
         student_id: r.student_id,
+        status: r.checkin_time ? "present" : "absent",
         checkin_time: r.checkin_time,
         match_distance: r.match_distance,
         photo_url: r.photo_s3_key ? await getPhotoUrl(r.photo_s3_key) : null,
       }))
     );
-    res.json(withUrls);
+
+    const present = roster.filter((r) => r.status === "present").length;
+    const total = roster.length;
+    res.json({
+      summary: {
+        present,
+        absent: total - present,
+        total,
+        percent: total > 0 ? Math.round((present / total) * 1000) / 10 : 0,
+      },
+      roster,
+    });
   }
 );
 

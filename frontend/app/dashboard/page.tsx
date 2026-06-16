@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AppHeader } from "@/components/Chrome";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
+import { AppHeader, Loading } from "@/components/Chrome";
 import { api } from "@/lib/api";
 import { getUser } from "@/lib/auth";
 
@@ -21,12 +22,23 @@ interface SessionItem {
   closed_at: string | null;
 }
 interface RecapRow {
-  id: number;
+  user_id: number;
   name: string;
   student_id: string | null;
-  checkin_time: string;
+  status: "present" | "absent";
+  checkin_time: string | null;
   match_distance: string | null;
   photo_url: string | null;
+}
+interface RecapSummary {
+  present: number;
+  absent: number;
+  total: number;
+  percent: number;
+}
+interface RecapData {
+  summary: RecapSummary;
+  roster: RecapRow[];
 }
 
 type View = "classes" | "create" | "detail" | "recap";
@@ -39,8 +51,12 @@ export default function DashboardPage() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [recapSession, setRecapSession] = useState<SessionItem | null>(null);
   const [recap, setRecap] = useState<RecapRow[]>([]);
+  const [summary, setSummary] = useState<RecapSummary | null>(null);
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const [error, setError] = useState("");
+  const [loadingClasses, setLoadingClasses] = useState(true);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [loadingRecap, setLoadingRecap] = useState(false);
 
   const [form, setForm] = useState({ name: "", mata_kuliah: "" });
   const [createMsg, setCreateMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -54,10 +70,13 @@ export default function DashboardPage() {
   }, []);
 
   const loadClasses = async () => {
+    setLoadingClasses(true);
     try {
       setClasses(await api.get<ClassItem[]>("/classes/mine"));
     } catch (e: any) {
       setError(e?.error ?? "Gagal memuat kelas.");
+    } finally {
+      setLoadingClasses(false);
     }
   };
 
@@ -81,10 +100,13 @@ export default function DashboardPage() {
   };
 
   const loadSessions = async (classId: number) => {
+    setLoadingSessions(true);
     try {
       setSessions(await api.get<SessionItem[]>(`/sessions/class/${classId}`));
     } catch (e: any) {
       setError(e?.error ?? "Gagal memuat sesi.");
+    } finally {
+      setLoadingSessions(false);
     }
   };
 
@@ -105,10 +127,17 @@ export default function DashboardPage() {
   const viewRecap = useCallback(async (s: SessionItem) => {
     setRecapSession(s);
     setView("recap");
+    setRecap([]);
+    setSummary(null);
+    setLoadingRecap(true);
     try {
-      setRecap(await api.get<RecapRow[]>(`/attendance/session/${s.id}`));
+      const data = await api.get<RecapData>(`/attendance/session/${s.id}`);
+      setRecap(data.roster);
+      setSummary(data.summary);
     } catch (e: any) {
       setError(e?.error ?? "Gagal memuat rekap.");
+    } finally {
+      setLoadingRecap(false);
     }
   }, []);
 
@@ -117,7 +146,9 @@ export default function DashboardPage() {
     if (view !== "recap" || !recapSession) return;
     const t = setInterval(async () => {
       try {
-        setRecap(await api.get<RecapRow[]>(`/attendance/session/${recapSession.id}`));
+        const data = await api.get<RecapData>(`/attendance/session/${recapSession.id}`);
+        setRecap(data.roster);
+        setSummary(data.summary);
       } catch {
         /* ignore */
       }
@@ -127,9 +158,11 @@ export default function DashboardPage() {
 
   const exportCsv = () => {
     if (!recapSession) return;
-    const header = "nama,nim,match_distance,waktu\n";
+    const header = "nama,nim,status,match_distance,waktu\n";
     const rows = recap
-      .map((r) => `"${r.name}",${r.student_id ?? "-"},${r.match_distance ?? "-"},${r.checkin_time}`)
+      .map((r) =>
+        `"${r.name}",${r.student_id ?? "-"},${r.status === "present" ? "Hadir" : "Absen"},${r.match_distance ?? "-"},${r.checkin_time ?? "-"}`
+      )
       .join("\n");
     const blob = new Blob([header + rows], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -155,7 +188,9 @@ export default function DashboardPage() {
                 + Buat Kelas
               </button>
             </div>
-            {classes.length === 0 ? (
+            {loadingClasses ? (
+              <Loading label="Memuat kelas…" />
+            ) : classes.length === 0 ? (
               <div className="card text-center text-[0.9rem] text-muted">
                 Belum ada kelas. Buat kelas pertamamu.
               </div>
@@ -226,6 +261,9 @@ export default function DashboardPage() {
 
             <div className="card overflow-x-auto">
               <h3 className="display mb-4 text-base">Sesi Absensi</h3>
+              {loadingSessions ? (
+                <Loading label="Memuat sesi…" />
+              ) : (
               <table className="w-full text-[0.88rem]">
                 <thead>
                   <tr className="border-b border-border text-left text-muted">
@@ -269,6 +307,7 @@ export default function DashboardPage() {
                   )}
                 </tbody>
               </table>
+              )}
             </div>
           </>
         )}
@@ -289,6 +328,48 @@ export default function DashboardPage() {
               </button>
             </div>
 
+            {loadingRecap ? (
+              <Loading label="Memuat rekap…" />
+            ) : (
+            <>
+            {/* Ringkasan + grafik */}
+            {summary && (
+              <div className="mb-4 grid gap-4 md:grid-cols-3">
+                <div className="card md:col-span-2 flex flex-wrap items-center gap-6">
+                  <div>
+                    <p className="text-[0.8rem] uppercase tracking-wider text-muted">Kehadiran</p>
+                    <p className="display text-3xl">
+                      {summary.present} <span className="text-muted text-xl">dari {summary.total}</span>
+                    </p>
+                    <p className="text-[0.9rem] text-accent">{summary.percent}% hadir</p>
+                  </div>
+                  <div className="flex gap-4 text-[0.85rem]">
+                    <span className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-full" style={{ background: "#34d399" }} />Hadir: {summary.present}</span>
+                    <span className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-full" style={{ background: "#6b6b80" }} />Absen: {summary.absent}</span>
+                  </div>
+                </div>
+                <div className="card flex items-center justify-center" style={{ minHeight: 160 }}>
+                  {summary.total > 0 ? (
+                    <ResponsiveContainer width="100%" height={150}>
+                      <PieChart>
+                        <Pie
+                          data={[{ name: "Hadir", value: summary.present }, { name: "Absen", value: summary.absent }]}
+                          dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={38} outerRadius={60} paddingAngle={2}
+                        >
+                          <Cell fill="#34d399" />
+                          <Cell fill="#6b6b80" />
+                        </Pie>
+                        <Tooltip contentStyle={{ background: "#13131a", border: "1px solid #222230", borderRadius: 8, color: "#f0f0f5" }} />
+                        <Legend wrapperStyle={{ fontSize: 12, color: "#6b6b80" }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-[0.85rem] text-muted">Belum ada anggota kelas</p>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="card overflow-x-auto">
               <table className="w-full text-[0.88rem]">
                 <thead>
@@ -296,6 +377,7 @@ export default function DashboardPage() {
                     <th className="py-2 font-medium">Foto</th>
                     <th className="py-2 font-medium">Nama</th>
                     <th className="py-2 font-medium">NIM</th>
+                    <th className="py-2 font-medium">Status</th>
                     <th className="py-2 font-medium">Jarak</th>
                     <th className="py-2 font-medium">Waktu</th>
                   </tr>
@@ -303,11 +385,11 @@ export default function DashboardPage() {
                 <tbody>
                   {recap.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-6 text-center text-muted">Belum ada yang absen</td>
+                      <td colSpan={6} className="py-6 text-center text-muted">Belum ada anggota kelas</td>
                     </tr>
                   ) : (
                     recap.map((r) => (
-                      <tr key={r.id} className="border-b border-border/50">
+                      <tr key={r.user_id} className={`border-b border-border/50 ${r.status === "absent" ? "opacity-60" : ""}`}>
                         <td className="py-2">
                           {r.photo_url ? (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -320,15 +402,22 @@ export default function DashboardPage() {
                             />
                           ) : (
                             <div className="flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface2 text-[0.65rem] text-muted">
-                              No foto
+                              {r.status === "absent" ? "—" : "No foto"}
                             </div>
                           )}
                         </td>
                         <td className="py-2">{r.name}</td>
                         <td className="py-2 font-mono text-muted">{r.student_id ?? "-"}</td>
+                        <td className="py-2">
+                          {r.status === "present" ? (
+                            <span className="rounded-pill bg-success/15 px-2 py-0.5 text-[0.75rem] text-success">Hadir</span>
+                          ) : (
+                            <span className="rounded-pill bg-error/15 px-2 py-0.5 text-[0.75rem] text-error">Absen</span>
+                          )}
+                        </td>
                         <td className="py-2 text-success">{r.match_distance ?? "-"}</td>
                         <td className="py-2 text-[0.82rem] text-muted">
-                          {new Date(r.checkin_time.replace(" ", "T") + "Z").toLocaleString("id-ID")}
+                          {r.checkin_time ? new Date(r.checkin_time.replace(" ", "T") + "Z").toLocaleString("id-ID") : "-"}
                         </td>
                       </tr>
                     ))
@@ -336,6 +425,8 @@ export default function DashboardPage() {
                 </tbody>
               </table>
             </div>
+            </>
+            )}
           </>
         )}
       </main>
